@@ -9,6 +9,7 @@ The site itself is plain static files, deployed to GitHub Pages by
 """
 
 import argparse
+import errno
 import functools
 import http.server
 import json
@@ -43,7 +44,19 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
 def serve(host: str, port: int, open_browser: bool) -> None:
     build()
     handler = functools.partial(NoCacheHandler, directory=str(SITE))
-    with http.server.ThreadingHTTPServer((host, port), handler) as httpd:
+    # If the port is taken (e.g. another preview is still running), try the next few.
+    for candidate in range(port, port + 20):
+        try:
+            httpd = http.server.ThreadingHTTPServer((host, candidate), handler)
+            break
+        except OSError as e:
+            if e.errno != errno.EADDRINUSE:
+                raise
+            print(f"Port {candidate} is in use, trying {candidate + 1}…")
+    else:
+        raise SystemExit(f"No free port between {port} and {port + 19}. Pass --port to pick another.")
+    port = candidate
+    with httpd:
         url = f"http://127.0.0.1:{port}/"
         print(f"Minigames running at {url}  (Ctrl+C to stop)")
         if open_browser:
