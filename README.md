@@ -1,0 +1,27 @@
+# Minigames
+
+Party games for one shared screen. Pass the phone or laptop around.
+A static site, deployed to GitHub Pages and installable as an app (PWA, works offline).
+Python + uv are only used to build and preview it.
+
+## Run locally
+
+```sh
+uv run minigames                  # opens http://127.0.0.1:8765/
+uv run minigames --host 0.0.0.0   # play from phones on your network
+uv run minigames build            # only regenerate site/games.json
+```
+
+## Games
+
+| Game | What it is |
+| --- | --- |
+| [Second Shot](site/games/second-shot/) | Click twice exactly N seconds apart. Furthest off is out each round; an exact hit wins instantly. Keeps a GOAT record per target time. |
+
+## Deploy to GitHub Pages
+
+1. Push this repo to GitHub (branch `main`).
+2. In the repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+3. Every push to `main` runs `.github/workflows/pages.yml` and publishes `site/`.
+
+See [AGENTS.md](AGENTS.md) for the layout, conventions and how to add a game.

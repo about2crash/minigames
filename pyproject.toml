@@ -1,0 +1,14 @@
+[project]
+name = "minigames"
+version = "0.1.0"
+description = "Party minigames as a static site, with a small Python tool to build and preview it."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+minigames = "minigames.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

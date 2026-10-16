@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script src="shared/pwa.js" data-root="./"></script>
+<title>Minigames</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<link rel="stylesheet" href="shared/theme.css">
+<style>
+.games { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.game {
+  display: grid; gap: 10px; text-decoration: none; color: inherit; height: 100%;
+  background: var(--face); color: var(--face-fg); border-radius: 10px; padding: 20px;
+  transition: transform .12s;
+}
+.game:hover { transform: translateY(-3px); }
+.game:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.game h2 { font-size: 2rem; line-height: 1; }
+.game p { margin: 0; opacity: .8; }
+.game .meta { font-family: var(--mono); font-size: .8rem; opacity: .6; }
+.game .go { font-family: var(--display); font-weight: 800; text-transform: uppercase; color: var(--accent); font-size: 1.2rem; }
+.soon { border: 2px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); display: grid; align-content: center; }
+@media (prefers-reduced-motion: reduce) { .game { transition: none; } }
+header { display: grid; gap: 12px; }
+.install { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>Mini<span>games</span></h1>
+    <p class="lede">Party games for one shared screen. Pick a game, pass the device around.</p>
+    <div class="install" id="install" hidden>
+      <button id="installBtn" class="primary" type="button">Install app</button>
+      <span class="hint">Adds Minigames to your home screen. Works offline.</span>
+    </div>
+    <p class="hint" id="iosHint" hidden>To install on iPhone or iPad: tap Share, then <b>Add to Home Screen</b>.</p>
+  </header>
+  <ul class="games" id="games">
+    <li class="soon">Loading games…</li>
+  </ul>
+</main>
+<script>
+// Install prompt (Chrome, Edge, Android). iOS has no prompt, so show a hint instead.
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  document.getElementById("install").hidden = false;
+});
+document.getElementById("installBtn").addEventListener("click", async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice.catch(() => {});
+  deferredInstall = null;
+  document.getElementById("install").hidden = true;
+});
+window.addEventListener("appinstalled", () => { document.getElementById("install").hidden = true; });
+if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent)) document.getElementById("iosHint").hidden = false;
+
+(async () => {
+  const ul = document.getElementById("games");
+  try {
+    const games = await (await fetch("games.json")).json();
+    ul.innerHTML = "";
+    for (const g of games) {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.className = "game"; a.href = g.url;
+      a.innerHTML = `<h2></h2><p></p><span class="meta"></span><span class="go">Play →</span>`;
+      a.querySelector("h2").textContent = g.title;
+      a.querySelector("p").textContent = g.tagline || "";
+      a.querySelector(".meta").textContent = g.players || "";
+      li.append(a); ul.append(li);
+    }
+    const soon = document.createElement("li");
+    soon.className = "soon"; soon.textContent = "More games coming.";
+    ul.append(soon);
+  } catch {
+    ul.innerHTML = `<li class="soon">Couldn't load the game list. Try reloading the page.</li>`;
+  }
+})();
+</script>
+</body>
+</html>
