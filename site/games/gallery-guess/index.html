@@ -61,6 +61,14 @@
 .locked .slot { pointer-events: none; }
 .locked .slot .x { display: none; }
 .start-row { display: grid; gap: 8px; }
+.rejoin { border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.rejoin p { margin: 0; }
+.sync-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.sync-list li { display: grid; grid-template-columns: minmax(0, 1fr) 2fr auto; gap: 10px; align-items: center; }
+.sync-list .who { overflow-wrap: anywhere; }
+.sync-list .bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.sync-list .bar i { display: block; height: 100%; background: var(--good); transform-origin: left; transition: transform .3s; }
+@media (prefers-reduced-motion: reduce) { .sync-list .bar i { transition: none; } }
 
 /* Round */
 .stage { display: grid; gap: 12px; justify-items: center; text-align: center; }
@@ -136,8 +144,12 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
   </div>
 
   <div class="lost" id="lost" hidden role="alert">
-    <b>Connection lost.</b>
-    <span class="hint">Your phone lost contact with the room (screen lock or network). Ask a player to show their invite code and scan it to get back in. Your score is kept.</span>
+    <b>No connection to the other players.</b>
+    <span class="hint">To reconnect, one side shows an invite code and the other scans it: either you scan a player's code, or they scan yours. Seat, score and photos are kept.</span>
+    <div class="row">
+      <button type="button" id="lostScan" hidden>Scan their invite</button>
+      <button type="button" id="lostInvite">Show my invite</button>
+    </div>
   </div>
 
   <!-- Start: name, create or join -->
@@ -152,6 +164,11 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
       <div id="joinBox" class="field" hidden>
         <p class="hint"><b id="inviterName"></b> invited you to a room.</p>
         <button class="primary" type="button" id="joinBtn">Join the game</button>
+      </div>
+      <div id="rejoinBox" class="field rejoin" hidden>
+        <p><b>Back to room <span id="rejoinRoom"></span>?</b><br>
+        <span class="hint">Ask any player there to tap Invite and scan their code. Your seat, score and photos come back.</span></p>
+        <button class="primary" type="button" id="rejoinScan" hidden>Scan their invite</button>
       </div>
       <div id="createBox" class="field">
         <button class="primary" type="button" id="createBtn">Create a room</button>
@@ -215,6 +232,17 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
     <div class="panel start-row">
       <button class="primary" type="button" id="startBtn" hidden>Start the game</button>
       <p class="hint" id="startMsg"></p>
+    </div>
+  </section>
+
+  <!-- Start was tapped: wait until every phone has every photo -->
+  <section id="sync" class="page panel stack" hidden>
+    <h2>Getting everyone's photos</h2>
+    <ul class="sync-list" id="syncList"></ul>
+    <p class="hint" id="syncMsg" role="status"></p>
+    <div class="row">
+      <button class="primary" type="button" id="syncForce" hidden>Start anyway</button>
+      <button type="button" id="syncCancel" hidden>Back to the lobby</button>
     </div>
   </section>
 

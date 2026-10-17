@@ -15,6 +15,24 @@ const session = {
   get() { try { return JSON.parse(sessionStorage.getItem(KEY + "session")) || {}; } catch { return {}; } },
   set(v) { try { sessionStorage.setItem(KEY + "session", JSON.stringify(v)); } catch {} },
 };
+// Picked photos survive a reload or a closed browser (IndexedDB holds the image files).
+const idb = {
+  open() {
+    return (this.db ??= new Promise((res, rej) => {
+      const r = indexedDB.open("minigames-gallery-guess", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+  },
+  async get(k) {
+    try {
+      const db = await this.open();
+      return await new Promise((res) => { const q = db.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); });
+    } catch { return undefined; }
+  },
+  async set(k, v) { try { (await this.open()).transaction("kv", "readwrite").objectStore("kv").put(v, k); } catch {} },
+};
 const CROSS = `<svg viewBox="0 0 10 10" width="12" height="12" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // in-page scanning works wherever there is a camera (https only); BarcodeDetector is used when present
@@ -26,9 +44,11 @@ room.mergeFacts = G.mergeFacts;
 room.cleanGame = G.cleanGame;
 
 // Local, per-phone data
-const photos = new Map();   // pid -> { url, owner, game }  (own photos too)
-let picks = [];             // my chosen photos: { buf, url }
-let myPids = [];            // ids of my photos once I'm ready
+const photos = new Map();   // pid -> { blob, url, owner, game }  (own photos too)
+let picks = [];             // my chosen photos: { blob, url }
+let myPids = [];            // ids of my photos once I'm ready (same order as picks)
+const sent = new Map();     // "peer:pid" -> when we last sent that photo there
+const asked = new Map();    // pid -> when we last asked someone for it
 const guesses = new Map();  // "game:round" -> Map(id -> { pick, ms })
 let joining = null;         // { inviter, reply } while the inviter still has to scan our reply
 let invite = null;          // { id, code, at } the invite currently on screen
@@ -52,6 +72,27 @@ setInterval(() => {
   seats[room.roomId] = { id: room.id, beat: Date.now() };
   store.set("seats", seats);
 }, 2000);
+// The room we were last in, for "Back to room …" after a reload or a closed browser.
+function lastSeat() {
+  const seats = store.get("seats", {});
+  let best = null;
+  for (const [r, v] of Object.entries(seats)) if (G.isId(r) && v && Date.now() - v.beat < 3 * 3600e3 && (!best || v.beat > best.beat)) best = { room: r, beat: v.beat };
+  return best;
+}
+// My ready photos per seat, so a reload or rejoin takes them (and the ready state) back.
+// Per seat, because several tabs of one browser can be different players.
+async function saveMine() {
+  const all = (await idb.get("seats")) || {};
+  for (const [id, v] of Object.entries(all)) if (!v || Date.now() - v.at > 864e5) delete all[id];
+  all[room.id] = { at: Date.now(), room: room.roomId, game: room.me.game, ready: !!room.me.ready, pids: myPids, blobs: picks.map((p) => p.blob) };
+  idb.set("seats", all);
+}
+const savePicks = () => idb.set("picks", picks.map((p) => p.blob));
+const picksLoaded = idb.get("picks").then((blobs) => {
+  if (!Array.isArray(blobs) || picks.length) return;
+  picks = blobs.filter((b) => b instanceof Blob).slice(0, G.MAX_PHOTOS).map((blob) => ({ blob, url: URL.createObjectURL(blob) }));
+  render();
+});
 
 // ── Small helpers ──
 let toastTimer;
@@ -86,7 +127,14 @@ function guessesFor(game, round) {
   if (!guesses.has(k)) guesses.set(k, new Map());
   return guesses.get(k);
 }
-const haveCount = () => [...photos.values()].filter((p) => p.game === room.state?.game).length;
+// Tell the leader how many of the photos in play we hold (and for which set).
+function updateHave() {
+  const s = room.state;
+  if (!s) return;
+  const need = G.requiredPids(s);
+  const have = need.filter((pid) => photos.has(pid)).length, haveOf = G.pidSig(need);
+  if (room.me.have !== have || room.me.haveOf !== haveOf) room.setFacts({ have, haveOf });
+}
 const othersAround = () => !!room.state && Object.entries(room.state.members).some(([id, m]) => id !== room.id && !m.left);
 
 // ── Keep the screen on while in a room ──
@@ -106,12 +154,18 @@ window.addEventListener("beforeunload", (e) => { if (room.state && othersAround(
 // ── Room events ──
 room.addEventListener("state", (e) => onState(e.detail));
 room.addEventListener("peers", (e) => {
-  if (e.detail.up) sendMyPhotos(e.detail.up);
+  const up = e.detail.up;
+  if (up) {
+    // a fresh connection: whatever was in flight on the old one is lost
+    for (const k of sent.keys()) if (k.startsWith(up + ":")) sent.delete(k);
+    sendMyPhotos(up);
+  }
   render();
 });
 room.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
 room.addEventListener("bulk", (e) => onBulk(e.detail));
 room.addEventListener("rejected", (e) => {
+  forgetSeat(room.roomId);
   resetLocal();
   room.leave();
   render();
@@ -130,8 +184,13 @@ function onState(detail) {
   if (room.me.game !== s.game) {
     for (const [pid, p] of photos) if (p.game !== s.game) { if (p.owner !== room.id) URL.revokeObjectURL(p.url); photos.delete(pid); }
     myPids = [];
-    room.setFacts({ game: s.game, ready: false, photos: 0, have: 0 });
+    room.setFacts({ game: s.game, ready: false, pids: [], have: 0, haveOf: "" });
+    saveMine();
   }
+  // the state says who owns which photo; it overrules whoever sent it to us
+  const owners = G.photoOwners(s);
+  for (const [pid, p] of photos) { const o = owners.get(pid); if (o && o !== p.owner) p.owner = o; }
+  updateHave();
   if (prev && prev.room === s.room) {
     for (const [id, m] of Object.entries(s.members)) {
       if (id === room.id) continue;
@@ -162,7 +221,10 @@ function onMessage(from, msg) {
     render();
   } else if (msg.t === "unphoto") {
     for (const [pid, p] of photos) if (p.owner === from && p.game === msg.game) { URL.revokeObjectURL(p.url); photos.delete(pid); }
-    room.setFacts({ have: haveCount() });
+    updateHave();
+  } else if (msg.t === "need" && msg.game === s.game && Array.isArray(msg.pids)) {
+    // someone is missing photos we hold (ours or relayed ones)
+    for (const pid of msg.pids.slice(0, 60)) if (G.isId(pid)) sendPhoto(from, pid);
   }
 }
 
@@ -170,18 +232,47 @@ function onBulk({ from, meta, data }) {
   const s = room.state;
   // a photo can overtake the room state on a fresh connection; old games are cleaned up in onState
   if (meta.t !== "photo" || !G.isId(meta.pid) || !Number.isInteger(meta.game) || (s && meta.game !== s.game) || photos.has(meta.pid)) return;
-  // nobody gets to flood us with more photos than the game allows
-  if ([...photos.values()].filter((p) => p.owner === from && p.game === meta.game).length >= G.MAX_PHOTOS) return;
-  photos.set(meta.pid, { url: URL.createObjectURL(data), owner: from, game: meta.game });
-  room.setFacts({ have: haveCount() });
+  // the owner is whoever the state lists; a photo the state doesn't list yet is only taken
+  // from its owner directly, and nobody gets to flood us with more than the game allows
+  let owner = s && G.photoOwners(s).get(meta.pid);
+  if (!owner) {
+    if ([...photos.values()].filter((p) => p.owner === from && p.game === meta.game).length >= G.MAX_PHOTOS) return;
+    owner = from;
+  }
+  photos.set(meta.pid, { blob: data, url: URL.createObjectURL(data), owner, game: meta.game });
+  updateHave();
   render();
 }
 
-function sendMyPhotos(to) {
-  const s = room.state;
-  if (!s || !room.me.ready || !myPids.length) return;
-  myPids.forEach((pid, i) => { if (picks[i]) room.sendBulk(to, { t: "photo", pid, game: s.game }, picks[i].buf); });
+async function sendPhoto(to, pid) {
+  const p = photos.get(pid), k = `${to}:${pid}`;
+  if (!p?.blob || p.game !== room.state?.game || Date.now() - (sent.get(k) || 0) < 20e3) return;
+  sent.set(k, Date.now());
+  if (!(await room.sendBulk(to, { t: "photo", pid, game: p.game }, await p.blob.arrayBuffer()))) sent.delete(k);
 }
+
+function sendMyPhotos(to) {
+  if (room.state && room.me.ready) for (const pid of myPids) sendPhoto(to, pid);
+}
+
+// Missing photos are asked for: from their owner if we're connected, else from anyone
+// we're connected to (photos only travel over direct links, so this bridges broken ones).
+setInterval(() => {
+  const s = room.state;
+  const near = room.alivePeers;
+  if (!s || !near.length) return;
+  const owners = G.photoOwners(s);
+  const ask = new Map();
+  for (const pid of G.requiredPids(s)) {
+    if (photos.has(pid) || Date.now() - (asked.get(pid) || 0) < 6000) continue;
+    asked.set(pid, Date.now());
+    const owner = owners.get(pid);
+    const to = near.includes(owner) ? owner : near[Math.floor(Math.random() * near.length)];
+    if (!ask.has(to)) ask.set(to, []);
+    ask.get(to).push(pid);
+  }
+  for (const [to, pids] of ask) room.send(to, { t: "need", game: s.game, pids });
+}, 1500);
 
 // ── Leader: drives rounds; any member can take this over at any time ──
 let timer = { key: null, end: 0 };
@@ -192,10 +283,13 @@ setInterval(() => {
   if (key !== timer.key) {
     timer = { key, end: Date.now() + (s.phase === "round" ? G.ROUND_MS + 800 : G.REVEAL_MS) };
   }
-  if (s.phase === "round") {
+  if (s.phase === "sync") {
+    const st = G.startStatus(s);
+    if (st.ok || !st.canStart) room.update((x) => G.syncStep(x));
+  } else if (s.phase === "round") {
     const g = guessesFor(s.game, s.round);
     if (G.guessers(s).every((id) => g.has(id)) || Date.now() >= timer.end) {
-      const owner = photos.get(s.order[s.round])?.owner ?? null;
+      const owner = G.photoOwners(s).get(s.order[s.round]) ?? null;
       room.update((st) => G.resolveRound(st, owner, Object.fromEntries(g)));
     }
   } else if (s.phase === "reveal" && Date.now() >= timer.end) {
@@ -215,6 +309,8 @@ function resetLocal() {
   for (const p of photos.values()) if (p.owner !== room.id) URL.revokeObjectURL(p.url);
   photos.clear();
   guesses.clear();
+  sent.clear();
+  asked.clear();
   myPids = [];
   invite = null;
   joining = null;
@@ -238,10 +334,22 @@ async function joinRoom(code) {
   if (!inv) { $("homeMsg").textContent = "That doesn't look like an invite link."; return; }
   const name = myName();
   if (!name) return;
-  const keepPicks = room.roomId === inv.room;
-  if (!keepPicks) { resetLocal(); picks = []; }
-  room.id = seatFor(inv.room);
-  room.me = { name };
+  // back into a room we were in (cut off, reloaded, browser closed): same seat, same photos
+  const again = room.roomId === inv.room;
+  const seat = seatFor(inv.room); // before resetLocal(), which forgets this tab's session
+  if (!again) resetLocal();
+  room.id = seat;
+  await picksLoaded;
+  const mine = again ? null : ((await idb.get("seats")) || {})[seat];
+  if (again) room.me = { ...room.me, name };
+  else if (mine?.room === inv.room && Number.isInteger(mine.game) && Array.isArray(mine.pids) && mine.pids.every(G.isId)
+    && Array.isArray(mine.blobs) && mine.blobs.length === mine.pids.length && mine.blobs.every((b) => b instanceof Blob)) {
+    for (const p of picks) URL.revokeObjectURL(p.url);
+    picks = mine.blobs.map((blob) => ({ blob, url: URL.createObjectURL(blob) }));
+    myPids = mine.pids;
+    myPids.forEach((pid, i) => photos.set(pid, { blob: picks[i].blob, url: picks[i].url, owner: room.id, game: mine.game }));
+    room.me = { name, game: mine.game, ready: mine.ready === true, pids: myPids };
+  } else room.me = { name };
   joining = { inviter: inv.name || "the host", reply: null };
   history.replaceState(null, "", BASE);
   render();
@@ -258,11 +366,23 @@ async function joinRoom(code) {
   }
 }
 
+function forgetSeat(roomId) {
+  const seats = store.get("seats", {});
+  delete seats[roomId];
+  store.set("seats", seats);
+}
+
 function leaveRoom() {
+  forgetSeat(room.roomId);
   room.leave();
   resetLocal();
   $("homeMsg").textContent = "";
   render();
+}
+
+async function scanInvite() {
+  const v = await scanCode();
+  if (v) joinRoom(codeFrom(v, "j"));
 }
 
 async function ensureInvite(force = false) {
@@ -391,7 +511,7 @@ async function compress(file) {
   c.height = Math.round(src.height * k);
   c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
   const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.78));
-  return { buf: await blob.arrayBuffer(), url: URL.createObjectURL(blob) };
+  return { blob, url: URL.createObjectURL(blob) };
 }
 
 let slotTarget = 0;
@@ -410,6 +530,7 @@ $("fileInput").addEventListener("change", async (e) => {
     while (i < G.MAX_PHOTOS && picks[i]) i++;
   }
   picks = picks.filter(Boolean);
+  savePicks();
   render();
 });
 
@@ -419,7 +540,7 @@ function setReady(on) {
   if (on) {
     if (!picks.length) { toast("Pick at least one photo first"); return; }
     myPids = picks.map(() => randomId(10));
-    myPids.forEach((pid, i) => photos.set(pid, { url: picks[i].url, owner: room.id, game: s.game }));
+    myPids.forEach((pid, i) => photos.set(pid, { blob: picks[i].blob, url: picks[i].url, owner: room.id, game: s.game }));
     room.me.ready = true;
     for (const id of room.alivePeers) sendMyPhotos(id);
   } else {
@@ -427,7 +548,9 @@ function setReady(on) {
     myPids = [];
     room.broadcast({ t: "unphoto", game: s.game });
   }
-  room.setFacts({ ready: on, photos: on ? picks.length : 0, have: haveCount() });
+  room.setFacts({ ready: on, pids: myPids });
+  saveMine();
+  updateHave();
   render();
 }
 
@@ -445,7 +568,7 @@ function guess(pick) {
 }
 
 // ── Rendering ──
-const SECTIONS = ["home", "reply", "handoff", "lobby", "round", "reveal", "over"];
+const SECTIONS = ["home", "reply", "handoff", "lobby", "sync", "round", "reveal", "over"];
 let shown = { key: null, at: 0 };   // when this round's photo appeared on this screen
 let built = { options: null, reveal: null, over: null };
 
@@ -468,6 +591,7 @@ function render() {
   }
   renderStatus();
   if (s.phase === "lobby") renderLobby();
+  else if (s.phase === "sync") renderSync();
   else if (s.phase === "round") renderRound();
   else if (s.phase === "reveal") renderReveal();
   else renderOver();
@@ -481,6 +605,12 @@ function renderHome() {
   $("createBox").hidden = !!inv;
   if (inv) $("inviterName").textContent = inv.name || "Someone";
   $("inviteScan").hidden = !canScan;
+  const last = !inv && lastSeat();
+  $("rejoinBox").hidden = !last;
+  if (last) {
+    $("rejoinRoom").textContent = last.room;
+    $("rejoinScan").hidden = !canScan;
+  }
 }
 
 function renderReply() {
@@ -502,12 +632,13 @@ function renderReply() {
 setInterval(() => { if (joining && !room.state) renderReply(); }, 5000);
 
 function renderStatus() {
-  const n = room.alivePeers.length;
+  const n = room.reachablePeers.filter((id) => room.state.members[id]).length;
   const others = othersAround();
   $("netDot").classList.toggle("off", others && !n);
   $("netText").textContent = !others ? "Only you so far" : `Connected to ${n} ${n === 1 ? "player" : "players"}`;
   if (others && !n) { lostSince ||= Date.now(); } else lostSince = 0;
   $("lost").hidden = !(lostSince && Date.now() - lostSince > 8000);
+  $("lostScan").hidden = !canScan;
   $("inviteOpen").hidden = room.state.phase === "lobby";
 }
 setInterval(() => { if (room.state) renderStatus(); }, 2000);
@@ -521,10 +652,10 @@ function renderLobby() {
     const tags = [];
     if (id === s.leader) tags.push(`<span class="chip lead">leading</span>`);
     if (!m.online) tags.push(`<span class="chip">offline</span>`);
-    else if (m.ready) {
-      tags.push(`<span class="chip ok">ready · ${esc(m.photos)} ${m.photos === 1 ? "photo" : "photos"}</span>`);
-      if ((m.have || 0) < st.total) tags.push(`<span class="chip">receiving ${esc(m.have || 0)}/${esc(st.total)}</span>`);
-    } else tags.push(`<span class="chip">picking photos</span>`);
+    else if (m.ready) tags.push(`<span class="chip ok">ready · ${esc(m.photos)} ${m.photos === 1 ? "photo" : "photos"}</span>`);
+    else tags.push(`<span class="chip">picking photos</span>`);
+    const behind = st.behind.find((b) => b.id === id);
+    if (m.online && behind && st.total) tags.push(`<span class="chip">receiving ${esc(behind.have)}/${esc(st.total)}</span>`);
     const kick = room.isLeader && id !== room.id ? `<button class="kick" type="button" data-kick="${esc(id)}" aria-label="Remove ${esc(m.name)}">${CROSS}</button>` : "";
     return `<li class="${m.online ? "" : "off"}"><span class="who">${esc(m.name)}${id === room.id ? " <span class=\"hint\">(you)</span>" : ""}</span><span class="tags">${tags.join("")}</span>${kick}</li>`;
   }).join("");
@@ -544,11 +675,36 @@ function renderLobby() {
   $("readyBtn").disabled = !ready && !picks.length;
 
   $("startBtn").hidden = !room.isLeader;
-  $("startBtn").disabled = !st.ok;
+  $("startBtn").disabled = !st.canStart;
   $("startMsg").textContent = room.isLeader
-    ? (st.ok ? `${st.ready.length} players, ${Math.min(st.total, G.MAX_ROUNDS)} rounds.` : st.reason)
+    ? (!st.canStart ? st.reason : st.ok ? `${st.ready.length} players, ${Math.min(st.total, G.MAX_ROUNDS)} rounds.`
+      : "Some phones are still receiving photos. Start now and the game begins as soon as they have them all.")
     : `Waiting for ${room.leaderName} to start the game.${st.ok ? "" : ` ${st.reason}.`}`;
 }
+
+// Start was tapped but not every phone has every photo yet: everyone waits here.
+let syncSince = { game: null, at: 0 };
+function renderSync() {
+  const s = room.state;
+  const st = G.startStatus(s);
+  if (syncSince.game !== s.game) syncSince = { game: s.game, at: Date.now() };
+  const rows = Object.entries(s.members).filter(([, m]) => m.online && !m.left).sort((a, b) => a[1].seq - b[1].seq);
+  $("syncList").innerHTML = rows.map(([id, m]) => {
+    const b = st.behind.find((x) => x.id === id);
+    const have = b ? b.have : st.total;
+    return `<li><span class="who">${esc(m.name)}${id === room.id ? " <span class=\"hint\">(you)</span>" : ""}</span>`
+      + `<span class="bar"><i style="transform: scaleX(${st.total ? have / st.total : 1})"></i></span>`
+      + `<span class="mono">${b ? `${esc(have)}/${esc(st.total)}` : "✓"}</span></li>`;
+  }).join("");
+  const slow = Date.now() - syncSince.at > 15e3;
+  $("syncForce").hidden = !room.isLeader || !slow;
+  $("syncCancel").hidden = !room.isLeader;
+  $("syncMsg").textContent = slow
+    ? `Still waiting for ${st.behind.map((b) => b.name).join(", ")}. A phone with a weak connection can take a while.`
+      + (room.isLeader ? " You can start anyway: they'll see a photo once it arrives." : "")
+    : "The game starts by itself as soon as every phone has every photo.";
+}
+setInterval(() => { if (room.state?.phase === "sync") renderSync(); }, 1000);
 
 function renderRound() {
   const s = room.state;
@@ -674,7 +830,14 @@ $("nameInput").addEventListener("keydown", (e) => {
 });
 $("inviteGo").addEventListener("click", () => joinRoom(codeFrom($("inviteInput").value, "j")));
 $("inviteInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("inviteGo").click(); });
-$("inviteScan").addEventListener("click", async () => { const v = await scanCode(); if (v) joinRoom(codeFrom(v, "j")); });
+$("inviteScan").addEventListener("click", scanInvite);
+$("rejoinScan").addEventListener("click", scanInvite);
+$("lostScan").addEventListener("click", scanInvite);
+$("lostInvite").addEventListener("click", () => {
+  if (room.state?.phase === "lobby") { $("inviteSlot").open = true; $("inviteSlot").scrollIntoView({ block: "start" }); }
+  else $("inviteDialog").showModal();
+  placeInvitePanel();
+});
 $("replyShare").addEventListener("click", () => joining?.reply && shareOrCopy(joining.reply, "Gallery Guess reply"));
 $("replyCopy").addEventListener("click", () => joining?.reply && copy(joining.reply));
 $("replyCancel").addEventListener("click", () => { room.leave(); resetLocal(); render(); });
@@ -688,11 +851,9 @@ $("replyScan").addEventListener("click", async () => { const v = await scanCode(
 $("inviteOpen").addEventListener("click", () => { $("inviteDialog").showModal(); placeInvitePanel(); });
 $("leaveBtn").addEventListener("click", leaveRoom);
 $("readyBtn").addEventListener("click", () => setReady(!room.me.ready));
-$("startBtn").addEventListener("click", () => {
-  const s = room.state;
-  const list = [...photos.entries()].filter(([, p]) => p.game === s.game).map(([pid, p]) => ({ pid, owner: p.owner }));
-  room.update((st) => G.startGame(st, list));
-});
+$("startBtn").addEventListener("click", () => room.update((st) => G.requestStart(st)));
+$("syncForce").addEventListener("click", () => room.update((st) => G.startGame(st, Math.random, true)));
+$("syncCancel").addEventListener("click", () => room.update((st) => { st.phase = "lobby"; }));
 $("againBtn").addEventListener("click", () => room.update(G.newGame));
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", (e) => {
@@ -708,6 +869,7 @@ document.addEventListener("click", (e) => {
     const i = +rm.dataset.remove;
     URL.revokeObjectURL(picks[i]?.url);
     picks.splice(i, 1);
+    savePicks();
     return render();
   }
   const slot = t.closest("[data-slot]");

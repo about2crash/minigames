@@ -101,12 +101,19 @@ just tell a browser its public address; no game data passes through them).
   `BroadcastChannel` (falls back to copy/paste). Or either side scans in the page
   (Scan buttons; needs https for the camera). Any member can invite.
 - **Mesh**: after that one manual exchange, everyone connects to everyone, with
-  signaling relayed over the existing connections. Broken links heal the same way.
+  signaling relayed over the existing connections. Broken links heal the same way:
+  a quiet link stays open 30 s (it may wake up), messages are relayed around it, and
+  both sides redial through the others; the new connection replaces the old one once
+  it is open (`peers` = working links, `pending` = still connecting).
+- **Presence**: a member is online while anyone can reach them (`room.reachable(id)`:
+  directly or via a neighbor's ping list), and turns offline only after `GRACE_MS`.
+  After frozen timers (screen lock) nobody is judged for a few seconds.
 - **Shared state**: `room.state` is owned by one leader and copied to all. Members send
   their own facts (`room.setFacts`), the leader merges them (`room.mergeFacts` hook).
   Game messages: `room.broadcast` / `room.send`; files: `room.sendBulk`.
-- **Leader**: the online member with the lowest join number. If it disappears (~7 s
-  without pings), the next one takes over with `term + 1`; leaving hands over first.
+- **Leader**: the online member with the lowest join number. If nobody can reach it
+  for 3 s (a link counts as dead after ~7 s without pings, or at once when it closes),
+  the next one takes over with `term + 1`; leaving hands over first.
   Game timers must therefore live in a leader loop that can start at any moment
   (see the leader `setInterval` in Gallery Guess).
 - Limits: about 12 players; some strict networks block direct connections (no TURN).
@@ -153,14 +160,22 @@ configurable to the millisecond). Times are scored in whole milliseconds.
 One phone per player over `shared/mesh.js`. Rules live in `logic.js` (tested).
 
 - Lobby: join by QR, pick up to 5 photos (resized to 1280 px JPEG in the browser),
-  tap Ready. Photos go straight to every other phone. The leader can start once at
-  least 2 players are ready and every ready phone has every photo.
+  tap Ready. Photos go straight to every other phone. Each member's photo ids are in the
+  state (`pids`), so the state says who owns what and which photos every phone needs
+  (`requiredPids`); phones report `have`/`haveOf` and ask for missing photos (`need`
+  message, answered by the owner or any phone that has them).
+- Start: the leader can tap Start once 2 players are ready. If a phone here still lacks
+  photos, everyone sees the "sync" screen, and the game begins by itself when all phones
+  have all photos (the leader may "Start anyway" after 15 s).
 - Rounds (max 20): photo + everyone in the game as options. 10 s, timed on each phone
   from the moment the photo shows. Points: 100 − 8 per second, min 10; wrong = 0.
   You may guess your own photo. Late joiners can guess too.
 - Reveal 5 s, then the next photo; at the end, standings and a gallery with owners.
   "Play again" returns to the lobby; photos stay picked, everyone taps Ready again.
 - Seats: `sessionStorage`/`localStorage["minigames:gallery-guess:seats"]` let a refreshed or
-  re-invited phone take its old seat (and score) back.
+  re-invited phone take its old seat (and score) back; home then offers "Back to room …".
+  Picked photos and the ready state per seat live in IndexedDB (`minigames-gallery-guess`),
+  so a reload or a closed browser keeps them. Getting back in still needs one invite scan
+  (without a server, a fresh page has no way to reach the others).
 - Owner secrecy: a phone knows who sent each photo (that's how it can reveal the
   owner); the UI never shows it before the reveal, but devtools could.

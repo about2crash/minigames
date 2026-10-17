@@ -2,7 +2,7 @@
 // (state merging, leader takeover, message routing) driven with fake peers.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Room, packSdp, unpackSdp, parseInvite, parseReply, cleanState } from "../../site/shared/mesh.js";
+import { Room, packSdp, unpackSdp, parseInvite, parseReply, cleanState, GRACE_MS } from "../../site/shared/mesh.js";
 
 // Shaped like a Chrome data-channel offer.
 const CHROME_OFFER = [
@@ -169,6 +169,9 @@ test("when the leader disappears, the next member by join order takes over", () 
   b.peers.set(C, fakePeer(C)); // A is gone for both
   c.peers.set(B, fakePeer(B));
   b._tick();
+  assert.equal(b.state.leader, A, "not at once: A may just be a moment out of reach");
+  b._leaderLostAt = c._leaderLostAt = Date.now() - 3500;
+  b._tick();
   c._tick();
   assert.equal(b.state.leader, B);
   assert.equal(b.state.term, 2);
@@ -186,6 +189,7 @@ test("a member cut off from everyone does not crown itself", () => {
   assert.equal(c.state.leader, A);
   // but when everyone else really left, the last one leads the room
   c.state.members[A].left = true;
+  c._leaderLostAt = Date.now() - 3500;
   c._tick();
   assert.equal(c.state.leader, C);
   c.destroy();
@@ -254,5 +258,116 @@ test("routing: forged senders are dropped", () => {
   assert.equal(got.length, 0, "malformed ids");
   b._route({ k: "app", mid: "f5", o: D, h: 1, d: { ok: 1 } }, C);
   assert.deepEqual(got, [{ from: D, msg: { ok: 1 } }], "a real relay from someone we can't reach directly");
+  b.destroy();
+});
+
+// ── Flaky links ──
+
+test("a member whose link to the leader broke is still reachable through others: no takeover", () => {
+  // B lost its link to A, but C still talks to both
+  const b = makeRoom(B, baseState());
+  b.peers.set(C, fakePeer(C, [A, B]));
+  b._tick();
+  assert.equal(b.state.leader, A, "A is reachable through C");
+  assert.equal(b.reachable(A), true);
+  assert.deepEqual(b.reachablePeers.sort(), [A, C]);
+  b.destroy();
+});
+
+test("the leader keeps an unreachable member online for a grace period", () => {
+  const a = makeRoom(A, baseState());
+  a.peers.set(B, fakePeer(B, [A])); // C: no link, and B can't reach C either
+  a._tick();
+  assert.equal(a.state.members[C].online, true, "just lost: still online");
+  a.lostAt.set(C, Date.now() - GRACE_MS - 1);
+  a._tick();
+  assert.equal(a.state.members[C].online, false, "gone for longer than the grace period");
+  // C shows up again through B
+  a.peers.get(B).neighbors = new Set([A, C]);
+  a._tick();
+  assert.equal(a.state.members[C].online, true);
+  assert.equal(a.lostAt.has(C), false);
+  a.destroy();
+});
+
+test("a quiet link is kept open (it may wake up) but no longer counts as alive", () => {
+  const b = makeRoom(B, baseState());
+  const pa = fakePeer(A, [B, C]);
+  pa.last = Date.now() - 10000;
+  b.peers.set(A, pa);
+  b.peers.set(C, fakePeer(C, [B]));
+  b._leaderLostAt = Date.now() - 3500;
+  b._tick();
+  assert.equal(b.peers.get(A), pa, "not closed yet");
+  assert.equal(b.alive(A), false);
+  assert.equal(b.state.leader, B, "A unreachable: B (next in line) takes over");
+  pa.last = Date.now() - 31000;
+  b._tick();
+  assert.equal(b.peers.has(A), false, "closed after a long silence");
+  b.destroy();
+});
+
+test("missing links are redialed: the lower id at once, the higher one after a few seconds", () => {
+  const dialed = [];
+  const a = makeRoom(A, baseState());
+  a._connectVia = (id) => dialed.push([A, id]);
+  a.peers.set(B, fakePeer(B, [A, C]));
+  a._tick();
+  assert.deepEqual(dialed, [[A, C]], "A < C: A dials");
+  const c = makeRoom(C, baseState());
+  c._connectVia = (id) => dialed.push([C, id]);
+  c.peers.set(B, fakePeer(B, [A, C]));
+  c._tick();
+  assert.equal(dialed.length, 1, "C waits for A first");
+  c.missing.set(A, Date.now() - 6000);
+  c._tick();
+  assert.deepEqual(dialed[1], [C, A], "then dials too");
+  a.destroy(); c.destroy();
+});
+
+test("a new connection replaces the old one only once it is open", () => {
+  const b = makeRoom(B, baseState());
+  const old = fakePeer(A, [B]);
+  let closed = false;
+  old.pc = { close() { closed = true; } };
+  b.peers.set(A, old);
+  const fresh = fakePeer(A, [B]);
+  b.pending.set(A, fresh);
+  assert.equal(b.peers.get(A), old, "still using the old link while the new one connects");
+  b._promote(fresh);
+  assert.equal(b.peers.get(A), fresh);
+  assert.equal(b.pending.has(A), false);
+  assert.equal(closed, true, "old link closed");
+  b.destroy();
+});
+
+test("after frozen timers (screen lock) nobody is judged gone straight away", () => {
+  const b = makeRoom(B, baseState());
+  const pa = fakePeer(A, [B, C]), pc = fakePeer(C, [A, B]);
+  b.peers.set(A, pa);
+  b.peers.set(C, pc);
+  b._tick();
+  pa.last = pc.last = Date.now() - 40000; // nothing heard for 40 s: we were asleep
+  b._tickAt = Date.now() - 40000;
+  b._tick();
+  assert.equal(b.peers.size, 2, "links get a moment to speak up");
+  assert.equal(b.state.leader, A, "no takeover while waking up");
+  b.destroy();
+});
+
+test("a player coming back doesn't grab the lead before hearing who is around", () => {
+  // B rejoins (low join number) through C, whose neighbor list hasn't arrived yet
+  const b = makeRoom(B, null);
+  const pc = fakePeer(C);
+  b.peers.set(C, pc);
+  b._adopt(baseState(), C, true);
+  b._tick();
+  assert.equal(b.state.leader, A);
+  // C's hello carries its neighbors, so A is known to be reachable right away
+  b._onDirect(pc, { k: "hello", id: C, room: "room1", name: "Cara", state: null, n: [A, B] });
+  assert.equal(b.reachable(A), true);
+  b._leaderLostAt = Date.now() - 3500;
+  b._tick();
+  assert.equal(b.state.leader, A);
   b.destroy();
 });

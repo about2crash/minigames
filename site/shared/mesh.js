@@ -8,6 +8,9 @@
 // - Leader: the room state is a plain object owned by one leader and copied to every
 //   member. Leader = online member with the lowest join number; when it disappears the
 //   next one takes over with a higher `term`. Highest term wins, so everyone converges.
+// - Flaky links: a link that goes quiet is kept open a while (it often comes back), messages
+//   are relayed around it, and both sides redial over the other members meanwhile. A member
+//   counts as online while anyone can reach them, and goes offline only after a grace period.
 // - Public STUN servers only tell each browser its public address (needed across the
 //   internet, not on the same Wi-Fi). Game data never passes through any server.
 //
@@ -20,6 +23,9 @@
 
 const ICE = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
 const PING_MS = 2000, DEAD_MS = 7000, CONNECT_MS = 15000, GATHER_MS = 2500, CHUNK = 16384;
+const CLOSE_MS = 30000; // a quiet link is closed only after this (it may wake up again)
+export const GRACE_MS = 12000; // nobody reaches a member for this long: shown as offline
+const TAKEOVER_MS = 3000; // the leader must be out of reach this long before the next one takes over
 const MAX_BULK = 8 * 1024 * 1024; // largest single file a peer may send us
 const ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
 
@@ -130,10 +136,14 @@ export class Room extends EventTarget {
     this.maxPeers = maxPeers;
     this.roomId = null;
     this.state = null;
-    this.peers = new Map();    // id -> peer
+    this.peers = new Map();    // id -> peer (the working connection)
+    this.pending = new Map();  // id -> peer still connecting; replaces the working one once open
     this.invites = new Map();  // inviteId -> { peer, at }
     this.seen = new Map();     // message id -> time (dedupe for relayed messages)
     this.attempts = new Map(); // id -> { at, wait } (mesh healing backoff)
+    this.missing = new Map();  // id -> since when we have no live link to that member
+    this.heard = new Map();    // id -> last message from them (relayed or direct)
+    this.lostAt = new Map();   // leader: id -> since when nobody reaches that member
     // Leader hook: how a member's self-reported facts land in the shared state.
     this.mergeFacts = (member, facts) => Object.assign(member, { name: str(facts.name) });
     // Hook: coerce the game's own fields of a state copy from a peer (return null to reject).
@@ -147,6 +157,19 @@ export class Room extends EventTarget {
   get leaderName() { return this.state?.members[this.state.leader]?.name || ""; }
   alive(id) { const p = this.peers.get(id); return !!p && p.open && Date.now() - p.last < DEAD_MS; }
   get alivePeers() { return [...this.peers.values()].filter((p) => this.alive(p.id)).map((p) => p.id); }
+  /** Directly, or through a member we are connected to. */
+  reachable(id) {
+    if (id === this.id || this.alive(id)) return true;
+    for (const p of this.peers.values()) if (p.neighbors.has(id) && this.alive(p.id)) return true;
+    return false;
+  }
+  /** Everyone we can reach, directly or one hop away. */
+  get reachablePeers() {
+    const out = new Set(this.alivePeers);
+    for (const id of this.alivePeers) for (const n of this.peers.get(id).neighbors) out.add(n);
+    out.delete(this.id);
+    return [...out];
+  }
 
   _emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
 
@@ -226,13 +249,14 @@ export class Room extends EventTarget {
     if (this.state?.kicked.includes(r.id)) throw new Error(`${r.name} was removed from this room`);
     if (this.alivePeers.length + 1 >= this.maxPeers) throw new Error("The room is full");
     this.invites.delete(r.invite);
-    const old = this.peers.get(r.id);
+    const old = this.pending.get(r.id);
     if (old) this._drop(old);
     const peer = inv.peer;
     peer.id = r.id;
     peer.name = r.name;
     peer.born = Date.now();
-    this.peers.set(r.id, peer);
+    // an old connection of theirs (they reloaded) is replaced once this one opens
+    this.pending.set(r.id, peer);
     await peer.pc.setRemoteDescription(unpackSdp(r.sdp, "answer"));
     return r.name;
   }
@@ -266,8 +290,7 @@ export class Room extends EventTarget {
       if (!s.kicked.includes(id)) s.kicked.push(id);
       if (s.members[id]) Object.assign(s.members[id], { left: true, online: false });
     });
-    const p = this.peers.get(id);
-    if (p) setTimeout(() => this._drop(p), 500);
+    for (const p of [this.peers.get(id), this.pending.get(id)]) if (p) setTimeout(() => this._drop(p), 500);
   }
 
   /** Send a binary payload straight to one peer (photos, files). */
@@ -299,11 +322,16 @@ export class Room extends EventTarget {
       rx: null, bulkQueue: Promise.resolve(),
     };
     peer.bulk.binaryType = "arraybuffer";
-    if (id) this.peers.set(id, peer);
+    if (id) {
+      const old = this.pending.get(id);
+      if (old) this._drop(old);
+      this.pending.set(id, peer);
+    }
     peer.ctl.onopen = () => {
       peer.open = true;
       peer.last = Date.now();
-      this._direct(peer, { k: "hello", id: this.id, room: this.roomId, name: this.me.name, state: this.state });
+      if (peer.id) this._promote(peer);
+      this._direct(peer, { k: "hello", id: this.id, room: this.roomId, name: this.me.name, state: this.state, n: this.alivePeers });
     };
     peer.ctl.onclose = () => this._drop(peer);
     peer.ctl.onmessage = (e) => {
@@ -336,6 +364,15 @@ export class Room extends EventTarget {
     return peer;
   }
 
+  // A new connection is up: it becomes the one we use, and an older one is closed.
+  _promote(peer) {
+    if (this.pending.get(peer.id) === peer) this.pending.delete(peer.id);
+    const old = this.peers.get(peer.id);
+    this.peers.set(peer.id, peer);
+    this.missing.delete(peer.id);
+    if (old && old !== peer) this._drop(old);
+  }
+
   _drop(peer) {
     if (peer.dropped) return;
     peer.dropped = true;
@@ -343,14 +380,18 @@ export class Room extends EventTarget {
     peer.open = false;
     try { peer.pc.close(); } catch {}
     if (peer.id && this.peers.get(peer.id) === peer) this.peers.delete(peer.id);
+    if (peer.id && this.pending.get(peer.id) === peer) this.pending.delete(peer.id);
     if (wasOpen) this._emit("peers", { down: peer.id });
     this._tick();
   }
 
   _closeAll() {
-    for (const p of [...this.peers.values()]) { p.open = false; p.dropped = true; try { p.pc.close(); } catch {} }
+    for (const p of [...this.peers.values(), ...this.pending.values()]) { p.open = false; p.dropped = true; try { p.pc.close(); } catch {} }
     for (const inv of this.invites.values()) inv.peer.pc.close();
     this.peers.clear();
+    this.pending.clear();
+    this.missing.clear();
+    this.lostAt.clear();
     this.invites.clear();
     this._emit("peers", {});
   }
@@ -369,6 +410,7 @@ export class Room extends EventTarget {
           return;
         }
         peer.name = str(m.name);
+        peer.neighbors = new Set(Array.isArray(m.n) ? m.n.filter(isId) : []);
         // a newcomer takes the room as its inviter knows it
         if (m.state) this._adopt(m.state, peer.id, !this.state);
         this.attempts.delete(peer.id);
@@ -408,10 +450,13 @@ export class Room extends EventTarget {
     if (env.to === this.id || env.h > 3) return;
     const out = { ...env, h: env.h + 1 };
     const open = [...this.peers.values()].filter((p) => p.open && p.id !== via && p.id !== env.o);
+    const live = open.filter((p) => this.alive(p.id));
     if (env.to) {
       const target = open.find((p) => p.id === env.to);
-      const hops = target ? [target] : open.filter((p) => p.neighbors.has(env.to));
-      for (const p of hops.length ? hops : open) this._direct(p, out);
+      let hops = target && this.alive(target.id) ? [target] : live.filter((p) => p.neighbors.has(env.to));
+      if (!hops.length) hops = live;
+      if (target && !hops.includes(target)) hops.push(target); // a quiet link may still carry it
+      for (const p of hops) this._direct(p, out);
       return;
     }
     const viaPeer = via && this.peers.get(via);
@@ -419,6 +464,7 @@ export class Room extends EventTarget {
   }
 
   _deliver(env) {
+    this.heard.set(env.o, Date.now());
     switch (env.k) {
       case "app": this._emit("message", { from: env.o, msg: env.d }); break;
       case "state": this._adopt(env.d, env.o); break;
@@ -471,7 +517,7 @@ export class Room extends EventTarget {
       this._emit("rejected", { why: "kicked" });
       return;
     }
-    for (const id of s.kicked) { const p = this.peers.get(id); if (p) this._drop(p); }
+    for (const id of s.kicked) for (const p of [this.peers.get(id), this.pending.get(id)]) if (p) this._drop(p);
     const leaderChanged = !prev || prev.leader !== s.leader;
     this._emit("state", { leaderChanged, prevLeader: prev?.leader });
     // the leader may not know our facts yet (new leader, or we just arrived)
@@ -484,7 +530,7 @@ export class Room extends EventTarget {
   _succession() {
     const s = this.state;
     return Object.entries(s.members)
-      .filter(([id, m]) => !m.left && !s.kicked.includes(id) && (id === this.id || this.alive(id)))
+      .filter(([id, m]) => !m.left && !s.kicked.includes(id) && this.reachable(id))
       .sort((a, b) => a[1].seq - b[1].seq)
       .map(([id]) => id);
   }
@@ -503,13 +549,13 @@ export class Room extends EventTarget {
   async _onSignal(from, d) {
     if (this.state?.kicked.includes(from) || !isObj(d) || typeof d.sdp !== "string") return;
     d = { type: d.type, sdp: d.sdp };
-    let peer = this.peers.get(from);
+    const cur = this.peers.get(from), dialing = this.pending.get(from);
     if (d.type === "offer") {
-      if (peer && peer.open && this.alive(from)) return;
+      // they have no working link to us; ours is kept only while it clearly still works
+      if (cur && cur.open && Date.now() - cur.last < 3000) return;
       // both sides dialed at once: the lower id's offer wins
-      if (peer && peer.initiator && !peer.open && this.id < from) return;
-      if (peer) this._drop(peer);
-      peer = this._newPeer(from, false);
+      if (dialing && dialing.initiator && this.id < from) return;
+      const peer = this._newPeer(from, false);
       try {
         await peer.pc.setRemoteDescription(d);
         await peer.pc.setLocalDescription(await peer.pc.createAnswer());
@@ -517,17 +563,22 @@ export class Room extends EventTarget {
         if (peer.dropped) return;
         this._route({ k: "sig", mid: randomId(10), o: this.id, h: 0, to: from, d: { type: "answer", sdp: peer.pc.localDescription.sdp } }, null);
       } catch { this._drop(peer); }
-    } else if (d.type === "answer" && peer && peer.pc.signalingState === "have-local-offer") {
-      try { await peer.pc.setRemoteDescription(d); } catch { this._drop(peer); }
+    } else if (d.type === "answer" && dialing && dialing.pc.signalingState === "have-local-offer") {
+      try { await dialing.pc.setRemoteDescription(d); } catch { this._drop(dialing); }
     }
   }
 
   // ── Heartbeat: pings, dead peers, leader takeover, healing ───────
   _tick() {
     const now = Date.now();
+    // Our timers were frozen (screen lock, app in the background): give the links a
+    // moment to speak up before judging anyone, us included, as gone.
+    if (this._tickAt && now - this._tickAt > 3000) this._calmUntil = now + 4000;
+    this._tickAt = now;
+    const calm = now < (this._calmUntil || 0);
     for (const [mid, t] of this.seen) if (now - t > 60e3) this.seen.delete(mid);
-    for (const p of [...this.peers.values()]) {
-      if (p.open && now - p.last > DEAD_MS) this._drop(p);
+    for (const p of [...this.peers.values(), ...this.pending.values()]) {
+      if (p.open && now - p.last > CLOSE_MS && !calm) this._drop(p);
       else if (!p.open && now - p.born > p.timeout) this._drop(p);
     }
     if (!this._pingAt || now - this._pingAt >= PING_MS) {
@@ -536,18 +587,26 @@ export class Room extends EventTarget {
       for (const p of this.peers.values()) if (p.open) this._direct(p, { k: "ping", n });
     }
     const s = this.state;
-    if (!s) return;
+    if (!s || calm) return;
 
+    if (this.isLeader || this.reachable(s.leader)) this._leaderLostAt = 0;
+    else this._leaderLostAt ||= now;
     if (this.isLeader) {
-      // keep the online flags honest and re-send the state now and then (heals missed copies)
+      // keep the online flags honest and re-send the state now and then (heals missed copies);
+      // a member nobody reaches stays online for a grace period, their link may come back
       let changed = false;
       for (const [id, m] of Object.entries(s.members)) {
-        const on = id === this.id || this.alive(id);
+        let on = this.reachable(id);
+        if (on) this.lostAt.delete(id);
+        else if (m.online && !m.left) {
+          if (!this.lostAt.has(id)) this.lostAt.set(id, now);
+          on = now - this.lostAt.get(id) < GRACE_MS;
+        }
         if (m.online !== on && !(m.left && !on)) { m.online = on; changed = true; }
       }
       if (changed) this.update(() => {});
       else if (!this._stateAt || now - this._stateAt > 3000) { this._stateAt = now; this._sendState(); }
-    } else if (!this.alive(s.leader)) {
+    } else if (this._leaderLostAt && now - this._leaderLostAt >= TAKEOVER_MS) {
       // The leader is gone. The most senior member we can still reach takes over,
       // unless we are cut off from everyone (then we wait to be re-invited).
       const order = this._succession();
@@ -562,12 +621,17 @@ export class Room extends EventTarget {
       }
     }
 
-    // Connect to every member we are missing; the lower id dials, with backoff.
+    // Connect to every member we have no live link to, through the others. The lower id
+    // dials first; the other side joins in after a few seconds (in case it hasn't noticed).
+    // Backoff grows only while nobody hears from them.
     for (const [id, m] of Object.entries(s.members)) {
-      if (id === this.id || m.left || s.kicked.includes(id) || this.peers.has(id) || this.id > id) continue;
+      if (id === this.id || m.left || s.kicked.includes(id) || this.alive(id)) { this.missing.delete(id); continue; }
       if (!this.alivePeers.length) break;
-      const a = this.attempts.get(id) || { at: 0, wait: 4000 };
-      if (now - a.at < a.wait) continue;
+      if (!this.missing.has(id)) this.missing.set(id, now);
+      if (this.pending.has(id) || (this.id > id && now - this.missing.get(id) < 5000)) continue;
+      const a = this.attempts.get(id) || { at: 0, wait: 3000 };
+      const around = this.reachable(id) || now - (this.heard.get(id) || 0) < 10e3;
+      if (now - a.at < (around ? Math.min(a.wait, 4000) : a.wait)) continue;
       this.attempts.set(id, { at: now, wait: Math.min(a.wait * 2, 60e3) });
       this._connectVia(id);
     }

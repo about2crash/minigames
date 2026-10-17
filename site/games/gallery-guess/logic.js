@@ -2,21 +2,25 @@
 // without a browser. The leader applies them through room.update(); see index.html.
 //
 // Game fields in the room state (next to the members/leader fields from mesh.js):
-//   phase   "lobby" | "round" | "reveal" | "over"
+//   phase   "lobby" | "sync" (started, waiting until every phone has every photo) | "round" | "reveal" | "over"
 //   game    counts up with every "play again"; photos and facts carry it so stale ones are ignored
 //   players ids whose photos are in this game (the answer options)
 //   order   photo ids in play order, round = index into it
 //   last    result of the latest round: { pid, owner, guesses: { id: { pick, ms, pts } } }
-// Member facts: name, game, ready, photos (how many they offer), have (photos received).
+// Member facts: name, game, ready, pids (ids of the photos they offer; photos = how many),
+//   have (how many of the photos in play this phone holds) and haveOf (pidSig of that set,
+//   so a count made for an older set of photos doesn't count).
 
 export const ROUND_MS = 10000;
 export const REVEAL_MS = 5000;
 export const MAX_ROUNDS = 20;
 export const MAX_PHOTOS = 5;
 
-const PHASES = ["lobby", "round", "reveal", "over"];
+const PHASES = ["lobby", "sync", "round", "reveal", "over"];
 export const isId = (v) => typeof v === "string" && /^[a-z0-9]{4,16}$/.test(v);
 const int = (v, min, max, d = min) => (Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : d);
+const pidList = (v) => (Array.isArray(v) ? [...new Set(v.filter(isId))].slice(0, MAX_PHOTOS) : []);
+const sig = (v) => (typeof v === "string" ? v.slice(0, 12) : "");
 
 /**
  * Hook for mesh.js: coerce the game fields of a state copy from another phone, so a
@@ -42,8 +46,10 @@ export function cleanGame(s) {
   for (const m of Object.values(s.members)) {
     m.score = int(m.score, 0, 1e6);
     m.ready = m.ready === true;
-    m.photos = int(m.photos, 0, MAX_PHOTOS);
+    m.pids = pidList(m.pids);
+    m.photos = m.pids.length;
     m.have = int(m.have, 0, 1000);
+    m.haveOf = sig(m.haveOf);
   }
   return out;
 }
@@ -84,42 +90,93 @@ export function spreadOrder(photos, rnd = Math.random) {
 }
 
 const present = (m) => m.online && !m.left;
+const bySeat = (s) => Object.entries(s.members).sort((a, b) => a[1].seq - b[1].seq);
+
+/** pid -> owner id, from the photo lists in the state (the first claim wins). */
+export function photoOwners(s) {
+  const out = new Map();
+  for (const [id, m] of bySeat(s)) for (const pid of m.pids || []) if (!out.has(pid)) out.set(pid, id);
+  return out;
+}
+
+/** The photos every phone needs: those of the ready players (lobby), or the game's. */
+export function requiredPids(s) {
+  if (s.phase !== "lobby" && s.phase !== "sync") return [...s.order];
+  return bySeat(s).filter(([, m]) => present(m) && m.ready).flatMap(([, m]) => m.pids || []);
+}
+
+/** Short fingerprint of a set of photo ids. */
+export function pidSig(pids) {
+  let h = 0x811c9dc5;
+  for (const c of [...pids].sort().join(",")) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return (h >>> 0).toString(36);
+}
 
 /** Leader hook for mesh.js: merge a member's facts, ignoring game facts from an older game. */
 export function mergeFacts(member, facts, state) {
   member.name = (typeof facts.name === "string" && facts.name.trim().slice(0, 20)) || "Player";
   member.score ??= 0;
   member.ready ??= false;
+  member.pids ??= [];
   member.photos ??= 0;
   member.have ??= 0;
+  member.haveOf ??= "";
   if (facts.game !== state.game) return member;
-  // ready and photo count are locked once the game has started
+  // ready and photos are locked once the game has started
   if (state.phase === "lobby") {
     member.ready = facts.ready === true;
-    member.photos = int(facts.photos, 0, MAX_PHOTOS);
+    member.pids = member.ready ? pidList(facts.pids) : [];
+    member.photos = member.pids.length;
   }
   member.have = int(facts.have, 0, 1000);
+  member.haveOf = sig(facts.haveOf);
   return member;
 }
 
-/** Who may start, and if not, why not. */
-export function startStatus(s) {
-  const ready = Object.entries(s.members).filter(([, m]) => present(m) && m.ready && m.photos > 0);
-  const total = ready.reduce((n, [, m]) => n + m.photos, 0);
-  if (ready.length < 2) return { ok: false, reason: "Waiting for at least 2 players with photos ready", ready: ready.map(([id]) => id), total };
-  const behind = ready.filter(([, m]) => (m.have || 0) < total);
-  if (behind.length) {
-    const names = behind.map(([, m]) => `${m.name} ${m.have || 0}/${total}`).join(", ");
-    return { ok: false, reason: `Sharing photos… ${names}`, ready: ready.map(([id]) => id), total };
-  }
-  return { ok: true, reason: "", ready: ready.map(([id]) => id), total };
+/** How many photos of the current set a member holds (0 if they counted an older set). */
+export function haveOf(m, need) {
+  return m.haveOf === need.sig ? Math.min(m.have || 0, need.total) : 0;
 }
 
-/** Leader: start a game with the photos it holds ([{ pid, owner }] for the current game). */
-export function startGame(s, photos, rnd = Math.random) {
-  const { ok, ready } = startStatus(s);
-  if (!ok) return false;
-  const usable = photos.filter((p) => ready.includes(p.owner));
+/**
+ * Who may start, and whether every phone has every photo yet.
+ * canStart: at least 2 players are ready. ok: and everyone here holds all their photos.
+ * behind: [{ id, name, have }] for the phones still receiving.
+ */
+export function startStatus(s) {
+  const ready = bySeat(s).filter(([, m]) => present(m) && m.ready && m.photos > 0);
+  const pids = requiredPids({ ...s, phase: "lobby" });
+  const need = { total: pids.length, sig: pidSig(pids) };
+  const behind = bySeat(s).filter(([, m]) => present(m) && haveOf(m, need) < need.total)
+    .map(([id, m]) => ({ id, name: m.name, have: haveOf(m, need) }));
+  const out = { ok: false, canStart: ready.length >= 2, reason: "", ready: ready.map(([id]) => id), total: need.total, sig: need.sig, behind };
+  if (!out.canStart) out.reason = "Waiting for at least 2 players with photos ready";
+  else if (behind.length) out.reason = `Sharing photos… ${behind.map((b) => `${b.name} ${b.have}/${need.total}`).join(", ")}`;
+  else out.ok = true;
+  return out;
+}
+
+/** Leader: Start was tapped. Starts right away, or waits in "sync" until every phone has every photo. */
+export function requestStart(s, rnd = Math.random) {
+  const st = startStatus(s);
+  if (!st.canStart) return false;
+  if (st.ok) return startGame(s, rnd);
+  s.phase = "sync";
+  return true;
+}
+
+/** Leader, while in "sync": start once everyone has all photos, or fall back to the lobby. */
+export function syncStep(s, rnd = Math.random) {
+  const st = startStatus(s);
+  if (!st.canStart) { s.phase = "lobby"; return true; }
+  return st.ok ? startGame(s, rnd) : false;
+}
+
+/** Leader: start a game with the photos of the ready players (force: even if some phones lack some). */
+export function startGame(s, rnd = Math.random, force = false) {
+  const { ok, canStart, ready } = startStatus(s);
+  if (!ok && !(force && canStart)) return false;
+  const usable = ready.flatMap((id) => s.members[id].pids.map((pid) => ({ pid, owner: id })));
   s.players = shuffle([...ready], rnd);
   s.order = spreadOrder(usable, rnd).slice(0, MAX_ROUNDS);
   s.round = 0;
@@ -163,7 +220,7 @@ export function newGame(s) {
   Object.assign(s, { phase: "lobby", players: [], order: [], round: 0, last: null });
   for (const [id, m] of Object.entries(s.members)) {
     if (m.left) { delete s.members[id]; continue; }
-    Object.assign(m, { ready: false, photos: 0, have: 0, score: 0 });
+    Object.assign(m, { ready: false, pids: [], photos: 0, have: 0, haveOf: "", score: 0 });
   }
 }
 
