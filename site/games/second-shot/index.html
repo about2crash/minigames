@@ -14,7 +14,6 @@
 <script src="../../shared/pwa.js" data-root="../../"></script>
 <title>Second Shot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
 <link rel="stylesheet" href="../../shared/theme.css">
 <style>
 /* Second Shot: stopwatch face as the hero, setup and results as panels. */
@@ -44,9 +43,9 @@ body.playing header { display: none; }
 
 /* GOAT record: the best shot ever made in this browser at the current target time */
 .goat { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: baseline;
-  border: 2px solid var(--accent); border-radius: 6px; padding: 12px 14px; }
+  border: 2px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; }
 .goat .label { grid-column: 1 / -1; color: var(--accent); }
-.goat .g-name { font-family: var(--display); font-weight: 800; font-size: 1.6rem; text-transform: uppercase; line-height: 1; overflow-wrap: anywhere; grid-column: 1 / 3; }
+.goat .g-name { font-family: var(--display); font-weight: var(--display-weight); font-size: 1.6rem; text-transform: var(--display-case); line-height: 1; overflow-wrap: anywhere; grid-column: 1 / 3; }
 .goat .g-time { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .goat .g-meta { grid-column: 1 / -1; color: var(--muted); font-size: .85rem; }
 .goat.empty .g-name { color: var(--muted); font-size: 1.2rem; }
@@ -60,10 +59,10 @@ body.playing header { display: none; }
 
 /* Stopwatch face */
 .face {
-  background: var(--face); color: var(--face-fg); border-radius: 10px; padding: 24px 20px;
+  padding: 24px 20px;
   display: grid; gap: 14px; justify-items: center; text-align: center; user-select: none;
 }
-.face .who { font-family: var(--display); font-size: clamp(2rem, 7vw, 3rem); font-weight: 800; text-transform: uppercase; line-height: 1; }
+.face .who { font-family: var(--display); font-size: clamp(2rem, 7vw, 3rem); font-weight: var(--display-weight); text-transform: var(--display-case); line-height: 1; }
 .face .meta { font-family: var(--mono); font-size: .85rem; opacity: .7; }
 .readout { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; font-size: clamp(3rem, 15vw, 6rem); line-height: 1; letter-spacing: -.02em; }
 .readout.hidden-time { opacity: .35; }
@@ -71,35 +70,32 @@ body.playing header { display: none; }
   width: min(100%, 360px, 48dvh); aspect-ratio: 1 / 1;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; max-width: 100%; border-radius: 50%;
   border: 6px solid var(--face-fg); background: var(--accent); color: var(--accent-fg);
-  font-family: var(--display); font-weight: 800; font-size: clamp(1.6rem, 6vw, 2.4rem); text-transform: uppercase;
+  font-family: var(--display); font-weight: var(--display-weight); font-size: clamp(1.6rem, 6vw, 2.4rem); text-transform: var(--display-case);
   touch-action: manipulation; transition: transform .06s;
 }
 .hit:active { transform: scale(.97); }
 .hit.running { background: var(--face-fg); color: var(--face); animation: pulse 1s infinite; }
 .hit.done { background: transparent; color: var(--face-fg); border-style: dashed; cursor: default; }
-@keyframes pulse { 50% { box-shadow: 0 0 0 14px rgba(214, 54, 31, .25); } }
+@keyframes pulse { 50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--accent) 25%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .hit.running { animation: none; } .hit { transition: none; } }
 .verdict { font-family: var(--mono); font-size: 1.1rem; min-height: 1.5em; }
-.face .primary { border-color: var(--face-fg); }
 
 /* Results */
 .results { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .results th, .results td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; }
 .results th { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
-.results td.mono { font-family: var(--mono); }
 .results tr.out td { color: var(--accent); }
 .results tr.out td:first-child::after { content: " · OUT"; font-weight: 600; }
 .results tr.perfect td { color: var(--good); font-weight: 600; }
 .results tr.perfect td:first-child::after { content: " · PERFECT"; }
 .results tr.best td:first-child::after { content: " · closest"; color: var(--good); font-weight: 600; }
-.bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 60px; }
+.bar { height: 8px; background: var(--line); border-radius: var(--radius-sm); overflow: hidden; min-width: 60px; }
 .bar i { display: block; height: 100%; background: var(--muted); }
 .out .bar i { background: var(--accent); }
 .table-wrap { overflow-x: auto; }
 .standings { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { font-size: .85rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); }
 .chip.gone { text-decoration: line-through; color: var(--muted); }
-.winner { font-family: var(--display); font-size: clamp(2.8rem, 12vw, 6rem); font-weight: 800; text-transform: uppercase; color: var(--accent); line-height: 1; overflow-wrap: anywhere; }
+.winner { font-family: var(--display); font-size: clamp(2.8rem, 12vw, 6rem); font-weight: var(--display-weight); text-transform: var(--display-case); color: var(--accent); line-height: 1; overflow-wrap: anywhere; }
 
 /* Winner screen */
 .win { position: relative; overflow: hidden; }
@@ -120,7 +116,7 @@ body.playing header { display: none; }
 /* Round history */
 .history { display: grid; gap: 8px; }
 .history:empty { display: none; }
-.history details { border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; }
+.history details { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; }
 .history summary { cursor: pointer; font-weight: 600; }
 .history summary span { font-weight: 400; color: var(--muted); }
 .history details[open] summary { margin-bottom: 8px; }
@@ -610,8 +606,12 @@ function startConfetti() {
   const W = c.clientWidth, H = c.clientHeight;
   c.width = W * dpr; c.height = H * dpr;
   ctx.scale(dpr, dpr);
-  const css = getComputedStyle(document.documentElement);
-  const colors = [css.getPropertyValue("--accent"), css.getPropertyValue("--good"), "#f2b705", "#3a7bd5", css.getPropertyValue("--fg")];
+  // resolve the brand tokens to plain colors for the canvas (they are light-dark() values)
+  const colors = ["--accent", "--good", "--pop-1", "--pop-2", "--fg"].map((t) => {
+    c.style.color = `var(${t})`;
+    return getComputedStyle(c).color;
+  });
+  c.style.color = "";
   const bits = Array.from({ length: 160 }, () => ({
     x: W / 2 + (Math.random() - .5) * 80,
     y: H * .25,

@@ -1,14 +1,17 @@
 // Minigames service worker: makes the site installable and playable offline.
 // Same-origin requests: network first (so updates show up), cache as fallback.
 // Google Fonts: cache first. Bump VERSION to drop old caches.
-const VERSION = "v1";
+const VERSION = "v3";
 const CACHE = `minigames-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
   "games.json",
   "shared/theme.css",
+  "shared/brand.css",
   "shared/pwa.js",
+  "shared/qr.js",
+  "shared/mesh.js",
   "manifest.webmanifest",
   "icons/icon-192.png",
   "icons/icon-512.png",
@@ -22,7 +25,7 @@ self.addEventListener("install", (event) => {
     // precache every game listed on the hub
     try {
       const games = await (await fetch("games.json", { cache: "no-store" })).json();
-      await cache.addAll(games.flatMap((g) => [g.url, `${g.url}index.html`]));
+      await cache.addAll(games.flatMap((g) => [g.url, `${g.url}index.html`, ...(g.files || []).map((f) => g.url + f)]));
     } catch {}
     await self.skipWaiting();
   })());

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Other players send us data: only scripts from this site may ever run (no inline scripts). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="../../manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="../../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../../icons/apple-touch-icon.png">
+<script src="../../shared/pwa.js" data-root="../../"></script>
+<title>Gallery Guess</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="../../shared/theme.css">
+<style>
+/* Gallery Guess: one phone per player, phones talk directly (shared/mesh.js). */
+.topbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.room-info { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.room-info button { min-height: 36px; padding: 4px 12px; font-size: .9rem; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; vertical-align: middle; }
+.dot.off { background: var(--muted); }
+.lost { border: 2px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 10px; }
+
+/* QR codes stay dark-on-light in both themes so every camera can read them */
+.qr { justify-self: center; width: min(100%, 300px); background: var(--face-fg); border-radius: var(--radius); padding: 6px; line-height: 0; }
+.qr svg { width: 100%; height: auto; }
+.qr .qr-bg { fill: var(--face-fg); }
+.qr .qr-fg { fill: var(--face); }
+.qr .hint { line-height: 1.5; padding: 40% 12px; display: block; text-align: center; color: var(--face); }
+.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 4px; }
+.reply-box { display: grid; gap: 14px; justify-items: center; text-align: center; }
+.reply-box .row { justify-content: center; }
+.big-name { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); font-size: clamp(2rem, 8vw, 3rem); line-height: 1; overflow-wrap: anywhere; }
+.face .hint, .face .lede { color: var(--face-fg); opacity: .75; }
+.face button:not(.primary) { border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); }
+
+/* Lobby */
+.members { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.members li { display: flex; gap: 8px; align-items: center; min-height: 44px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.members .who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.members .tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.members .off { color: var(--muted); }
+.chip.lead { border-color: var(--accent); color: var(--accent); }
+.chip.ok { border-color: var(--good); color: var(--good); }
+.kick { min-height: 44px; min-width: 44px; padding: 0; color: var(--muted); display: grid; place-items: center; }
+.slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.slot { position: relative; aspect-ratio: 1; }
+.slot .pick { width: 100%; height: 100%; min-height: 0; padding: 0; overflow: hidden; display: grid; place-items: center;
+  border: 2px dashed var(--line); border-radius: var(--radius); color: var(--muted); font-size: 1.6rem; line-height: 1; }
+.slot.filled .pick { border-style: solid; }
+.slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* remove button: small round badge in the corner, with a 44px touch area */
+.slot .x { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: color-mix(in srgb, var(--face) 80%, transparent); color: var(--face-fg); }
+.slot .x::after { content: ""; position: absolute; inset: -8px; }
+.locked .slot { pointer-events: none; }
+.locked .slot .x { display: none; }
+.start-row { display: grid; gap: 8px; }
+
+/* Round */
+.stage { display: grid; gap: 12px; justify-items: center; text-align: center; }
+.photo { width: 100%; height: min(52dvh, 520px); border-radius: var(--radius); overflow: hidden; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--face-fg) 8%, transparent); }
+.photo img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.photo .hint { padding: 16px; }
+.timer { width: 100%; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--face-fg) 20%, transparent); overflow: hidden; }
+.timer i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+.options { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.options button { min-height: 52px; font-weight: 600; border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); overflow-wrap: anywhere; }
+.options button.picked { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.options button:disabled:not(.picked) { opacity: .45; }
+.options button.right { background: var(--good); color: var(--face); border-color: var(--good); opacity: 1; }
+.guessed { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; min-height: 28px; }
+.guessed .chip { border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); }
+.guessed .chip.done { border-color: var(--good); color: var(--good); }
+
+/* Reveal and results */
+.reveal-photo { height: min(32dvh, 300px); }
+.verdict { font-family: var(--mono); font-size: 1.05rem; }
+.verdict.good { color: var(--good); }
+.board { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-variant-numeric: tabular-nums; text-align: left; justify-self: stretch; }
+.board li { display: grid; grid-template-columns: 2em 1fr auto auto; gap: 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.board .place { font-family: var(--mono); color: var(--muted); }
+.board .pick { color: var(--muted); font-size: .85rem; text-align: right; }
+.board .score { font-family: var(--mono); font-weight: 600; text-align: right; min-width: 3.5em; }
+.face .board li { border-color: color-mix(in srgb, var(--face-fg) 20%, transparent); }
+.face .board .place, .face .board .pick { color: var(--face-fg); opacity: .65; }
+.board .plus { color: var(--good); }
+.winner { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); font-size: clamp(2.6rem, 11vw, 5rem); color: var(--accent); line-height: 1; overflow-wrap: anywhere; text-align: center; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.gallery figure { margin: 0; display: grid; gap: 4px; }
+.gallery button { padding: 0; border: 0; border-radius: var(--radius); overflow: hidden; aspect-ratio: 1; }
+.gallery img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery figcaption { font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+
+dialog { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); color: var(--fg); padding: 20px;
+  width: min(100vw - 24px, 480px); max-height: calc(100dvh - 24px); }
+dialog::backdrop { background: color-mix(in srgb, var(--face) 70%, transparent); }
+dialog .close-row { display: flex; justify-content: flex-end; }
+#scanDialog video { width: 100%; border-radius: var(--radius); background: var(--face); }
+#viewer img { width: 100%; max-height: 75dvh; object-fit: contain; display: block; }
+
+.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--face); color: var(--face-fg); border-radius: 999px; padding: 10px 18px; font-size: .95rem;
+  max-width: calc(100vw - 32px); box-shadow: 0 6px 24px color-mix(in srgb, var(--face) 40%, transparent); z-index: 10;
+  transition: opacity .2s, transform .2s; }
+.toast:empty { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+.how p { margin: 0; }
+details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+#inviteSlot > summary { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); font-size: 1.6rem; }
+#inviteSlot #invitePanel > h2 { display: none; }
+#inviteSlot:not([open]) { gap: 0; }
+@media (max-width: 480px) {
+  .slots { gap: 6px; }
+  .options { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="topbar">
+    <a class="back" href="../../">← All games</a>
+    <div class="room-info" id="roomInfo" hidden>
+      <span class="hint"><span class="dot" id="netDot"></span><span id="netText"></span></span>
+      <button type="button" id="inviteOpen">Invite</button>
+      <button type="button" id="leaveBtn">Leave</button>
+    </div>
+  </div>
+
+  <div class="lost" id="lost" hidden role="alert">
+    <b>Connection lost.</b>
+    <span class="hint">Your phone lost contact with the room (screen lock or network). Ask a player to show their invite code and scan it to get back in. Your score is kept.</span>
+  </div>
+
+  <!-- Start: name, create or join -->
+  <section id="home" class="page stack" hidden>
+    <header>
+      <h1>Gallery <span>Guess</span></h1>
+      <p class="lede">Everyone picks a few photos from their camera roll. Each round shows one: guess whose it is, fast. One phone per player; phones connect directly to each other, no accounts and no server.</p>
+    </header>
+    <div class="panel">
+      <label class="field"><span class="label">Your name</span>
+        <input type="text" id="nameInput" maxlength="20" autocomplete="nickname" enterkeyhint="go" placeholder="e.g. Sam"></label>
+      <div id="joinBox" class="field" hidden>
+        <p class="hint"><b id="inviterName"></b> invited you to a room.</p>
+        <button class="primary" type="button" id="joinBtn">Join the game</button>
+      </div>
+      <div id="createBox" class="field">
+        <button class="primary" type="button" id="createBtn">Create a room</button>
+        <details>
+          <summary>Got an invite link instead?</summary>
+          <div class="row">
+            <input type="text" id="inviteInput" placeholder="Paste the invite link" autocomplete="off" style="flex: 1">
+            <button type="button" id="inviteGo">Join</button>
+            <button type="button" id="inviteScan" hidden>Scan</button>
+          </div>
+        </details>
+      </div>
+      <p class="hint" id="homeMsg" role="alert"></p>
+    </div>
+    <details class="panel how">
+      <summary>How joining works</summary>
+      <p>One player creates a room and shows an invite code. You scan it with your phone camera, type your name and get a reply code. The host scans your reply, and you're in. Anyone already in the room can invite the next player.</p>
+      <p class="hint">Works best on the same Wi-Fi. Across the internet it usually works too; some strict networks (offices, hotels, some mobile carriers) block direct connections.</p>
+    </details>
+  </section>
+
+  <!-- Guest: show the reply code to the inviter -->
+  <section id="reply" class="page face reply-box" hidden>
+    <span class="label" style="color: inherit; opacity: .7">Almost in</span>
+    <div class="big-name">Show this to <span id="replyTo"></span></div>
+    <p class="hint">They scan it with their phone camera. Can't scan? Share the link with them instead.</p>
+    <div class="qr" id="replyQr"><span class="hint">Preparing your reply…</span></div>
+    <div class="row">
+      <button type="button" id="replyShare">Share link</button>
+      <button type="button" id="replyCopy">Copy link</button>
+    </div>
+    <p class="hint" id="replyMsg" role="status">Waiting for them to scan…</p>
+    <button type="button" id="replyCancel">Cancel</button>
+  </section>
+
+  <!-- Reply link opened in a new tab: hand it to the game tab -->
+  <section id="handoff" class="page panel" hidden>
+    <h2 id="handoffTitle">Passing the reply on…</h2>
+    <p class="hint" id="handoffMsg">One moment.</p>
+    <div id="handoffManual" class="field" hidden>
+      <span class="label">Reply code</span>
+      <div class="row"><input type="text" id="handoffCode" readonly style="flex: 1"><button type="button" id="handoffCopy">Copy</button></div>
+    </div>
+  </section>
+
+  <!-- Lobby -->
+  <section id="lobby" class="page stack" hidden>
+    <header><h1>Gallery <span>Guess</span></h1></header>
+    <div class="panel">
+      <div class="row" style="justify-content: space-between"><h2>Players</h2><span class="label" id="roomCode"></span></div>
+      <ul class="members" id="members"></ul>
+    </div>
+    <details class="panel" id="inviteSlot"><summary>Invite players</summary></details>
+    <div class="panel" id="photosPanel">
+      <h2>Your photos</h2>
+      <p class="hint">Pick up to 5 photos from your camera roll. Interesting ones that give a hint about you work best.</p>
+      <div class="slots" id="slots"></div>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
+      <button class="primary" type="button" id="readyBtn">I'm ready</button>
+    </div>
+    <div class="panel start-row">
+      <button class="primary" type="button" id="startBtn" hidden>Start the game</button>
+      <p class="hint" id="startMsg"></p>
+    </div>
+  </section>
+
+  <!-- Round -->
+  <section id="round" class="page face stage" hidden>
+    <span class="label" id="roundLabel" style="color: inherit; opacity: .7"></span>
+    <div class="timer"><i id="timerBar"></i></div>
+    <div class="photo" id="roundPhoto"></div>
+    <div class="big-name" style="font-size: 1.6rem">Whose photo is this?</div>
+    <div class="options" id="options"></div>
+    <div class="guessed" id="guessed"></div>
+  </section>
+
+  <!-- Reveal -->
+  <section id="reveal" class="page face stage" hidden>
+    <span class="label" id="revealLabel" style="color: inherit; opacity: .7"></span>
+    <div class="photo reveal-photo" id="revealPhoto"></div>
+    <div class="big-name" id="revealOwner"></div>
+    <div class="verdict" id="revealVerdict"></div>
+    <ol class="board" id="revealBoard" style="width: 100%"></ol>
+  </section>
+
+  <!-- Game over -->
+  <section id="over" class="page stack" hidden>
+    <div class="panel">
+      <span class="label" style="text-align: center">Winner</span>
+      <div class="winner" id="winner"></div>
+      <ol class="board" id="finalBoard"></ol>
+      <button class="primary" type="button" id="againBtn" hidden>Play again</button>
+      <p class="hint" id="againMsg"></p>
+    </div>
+    <div class="panel">
+      <h2>All the photos</h2>
+      <div class="gallery" id="gallery"></div>
+    </div>
+  </section>
+</main>
+
+<!-- The invite panel lives in the lobby, or in this dialog during a game -->
+<dialog id="inviteDialog" aria-label="Invite players">
+  <div class="close-row"><button type="button" data-close>Close</button></div>
+  <div id="invitePanel" class="field">
+    <h2>Invite players</h2>
+    <ol class="steps hint">
+      <li>They scan this code with their phone camera (or open the link).</li>
+      <li>They type their name and show you a reply code.</li>
+      <li>You scan their reply with your camera. Done.</li>
+    </ol>
+    <div class="qr" id="inviteQr"><span class="hint">Making an invite…</span></div>
+    <div class="row" style="justify-content: center">
+      <button type="button" id="inviteShare">Share link</button>
+      <button type="button" id="inviteCopy">Copy link</button>
+      <button type="button" id="inviteNew">New code</button>
+    </div>
+    <div class="field">
+      <span class="label">Their reply</span>
+      <div class="row">
+        <button type="button" id="replyScan" hidden>Scan reply</button>
+        <input type="text" id="replyInput" placeholder="…or paste their reply link" autocomplete="off" style="flex: 1">
+        <button type="button" id="replyGo">Add</button>
+      </div>
+    </div>
+    <p class="hint" id="inviteMsg" role="status"></p>
+  </div>
+</dialog>
+
+<dialog id="scanDialog" aria-label="Scan a code">
+  <div class="close-row"><button type="button" data-close>Close</button></div>
+  <video id="scanVideo" playsinline muted></video>
+  <p class="hint">Point the camera at the code.</p>
+</dialog>
+
+<dialog id="viewer" aria-label="Photo">
+  <div class="close-row"><button type="button" data-close>Close</button></div>
+  <img alt="" id="viewerImg">
+  <p class="hint" id="viewerCap"></p>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="game.js"></script>
+</body>
+</html>

@@ -20,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test
+        run: uv run minigames test
       - name: Build game list
         run: uv run minigames build
       - uses: actions/configure-pages@v5

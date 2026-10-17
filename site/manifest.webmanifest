@@ -1,7 +1,7 @@
 {
   "name": "Minigames",
   "short_name": "Minigames",
-  "description": "Party games for one shared screen.",
+  "description": "Party games for one device or everyone's phones.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

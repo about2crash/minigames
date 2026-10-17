@@ -1,0 +1,39 @@
+/* Minigames brand: the only file to edit for a new color scheme or branding.
+   Everything else (theme.css, the hub, every game) reads these tokens.
+   Colors are light-dark(<light mode>, <dark mode>); dark mode follows the OS.
+   Outside CSS, the brand also lives in manifest.webmanifest (colors) and icons/ (`uv run minigames icons`). */
+
+/* Fonts: swap this URL and the three families below. */
+@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap");
+
+:root {
+  /* Surfaces and text */
+  --bg:        light-dark(#eef0ec, #141917);  /* page background */
+  --panel:     light-dark(#ffffff, #1d2420);  /* cards, forms */
+  --fg:        light-dark(#1d2420, #e8ece9);  /* main text */
+  --muted:     light-dark(#5d6a63, #95a39b);  /* secondary text */
+  --line:      light-dark(#cfd6d1, #2f3a35);  /* borders, dividers */
+
+  /* Brand colors */
+  --accent:    light-dark(#d6361f, #ff5a3c);  /* buttons, highlights (stopwatch red) */
+  --accent-fg: light-dark(#ffffff, #1a0f0c);  /* text on --accent */
+  --good:      light-dark(#1f7a4d, #4cc98a);  /* success, best result */
+  --pop-1:     light-dark(#f2b705, #f2b705);  /* extra celebration colors (confetti) */
+  --pop-2:     light-dark(#3a7bd5, #5b9bf0);
+
+  /* "Face": the dark hero surface (game cards, stopwatch). Also the browser bar color. */
+  --face:      light-dark(#1d2420, #0b0e0d);
+  --face-fg:   light-dark(#f4f6f2, #f4f6f2);
+
+  /* Type */
+  --display: "Big Shoulders Display", "Arial Narrow", sans-serif;  /* headings, big words */
+  --body:    "IBM Plex Sans", system-ui, sans-serif;
+  --mono:    "IBM Plex Mono", ui-monospace, monospace;               /* numbers, times */
+  --display-weight: 800;
+  --display-case: uppercase;  /* none | uppercase */
+
+  /* Shape */
+  --radius-sm: 4px;   /* buttons, inputs */
+  --radius:    6px;   /* panels */
+  --radius-lg: 10px;  /* face surfaces, game cards */
+}

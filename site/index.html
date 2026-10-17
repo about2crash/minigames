@@ -14,22 +14,20 @@
 <script src="shared/pwa.js" data-root="./"></script>
 <title>Minigames</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
 <link rel="stylesheet" href="shared/theme.css">
 <style>
 .games { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
 .game {
-  display: grid; gap: 10px; text-decoration: none; color: inherit; height: 100%;
-  background: var(--face); color: var(--face-fg); border-radius: 10px; padding: 20px;
+  display: grid; gap: 10px; text-decoration: none; height: 100%;
   transition: transform .12s;
 }
 .game:hover { transform: translateY(-3px); }
-.game:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.game:focus-visible { outline-offset: 3px; }
 .game h2 { font-size: 2rem; line-height: 1; }
 .game p { margin: 0; opacity: .8; }
 .game .meta { font-family: var(--mono); font-size: .8rem; opacity: .6; }
-.game .go { font-family: var(--display); font-weight: 800; text-transform: uppercase; color: var(--accent); font-size: 1.2rem; }
-.soon { border: 2px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); display: grid; align-content: center; }
+.game .go { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); color: var(--accent); font-size: 1.2rem; }
+.soon { border: 2px dashed var(--line); border-radius: var(--radius-lg); padding: 20px; color: var(--muted); display: grid; align-content: center; }
 @media (prefers-reduced-motion: reduce) { .game { transition: none; } }
 header { display: grid; gap: 12px; }
 .install { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
@@ -39,7 +37,7 @@ header { display: grid; gap: 12px; }
 <main class="page">
   <header>
     <h1>Mini<span>games</span></h1>
-    <p class="lede">Party games for one shared screen. Pick a game, pass the device around.</p>
+    <p class="lede">Party games. Pass one device around, or play together on everyone's own phone.</p>
     <div class="install" id="install" hidden>
       <button id="installBtn" class="primary" type="button">Install app</button>
       <span class="hint">Adds Minigames to your home screen. Works offline.</span>
@@ -77,7 +75,7 @@ if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent)) document.getEl
     for (const g of games) {
       const li = document.createElement("li");
       const a = document.createElement("a");
-      a.className = "game"; a.href = g.url;
+      a.className = "game face"; a.href = g.url;
       a.innerHTML = `<h2></h2><p></p><span class="meta"></span><span class="go">Play →</span>`;
       a.querySelector("h2").textContent = g.title;
       a.querySelector("p").textContent = g.tagline || "";
