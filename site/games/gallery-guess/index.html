@@ -102,7 +102,9 @@ dialog { border: 1px solid var(--line); border-radius: var(--radius-lg); backgro
   width: min(100vw - 24px, 480px); max-height: calc(100dvh - 24px); }
 dialog::backdrop { background: color-mix(in srgb, var(--face) 70%, transparent); }
 dialog .close-row { display: flex; justify-content: flex-end; }
-#scanDialog video { width: 100%; border-radius: var(--radius); background: var(--face); }
+.viewfinder { position: relative; }
+.viewfinder video { width: 100%; display: block; border-radius: var(--radius); background: var(--face); }
+.viewfinder::after { content: ""; position: absolute; inset: 15%; border: 3px solid var(--accent); border-radius: var(--radius); pointer-events: none; }
 #viewer img { width: 100%; max-height: 75dvh; object-fit: contain; display: block; }
 
 .toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
@@ -153,12 +155,12 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
       </div>
       <div id="createBox" class="field">
         <button class="primary" type="button" id="createBtn">Create a room</button>
+        <button type="button" id="inviteScan" hidden>Scan an invite code</button>
         <details>
           <summary>Got an invite link instead?</summary>
           <div class="row">
             <input type="text" id="inviteInput" placeholder="Paste the invite link" autocomplete="off" style="flex: 1">
             <button type="button" id="inviteGo">Join</button>
-            <button type="button" id="inviteScan" hidden>Scan</button>
           </div>
         </details>
       </div>
@@ -270,9 +272,9 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
     <div class="field">
       <span class="label">Their reply</span>
       <div class="row">
-        <button type="button" id="replyScan" hidden>Scan reply</button>
-        <input type="text" id="replyInput" placeholder="…or paste their reply link" autocomplete="off" style="flex: 1">
+        <input type="text" id="replyInput" placeholder="Paste their reply link" autocomplete="off" style="flex: 1">
         <button type="button" id="replyGo">Add</button>
+        <button type="button" id="replyScan" hidden>Scan</button>
       </div>
     </div>
     <p class="hint" id="inviteMsg" role="status"></p>
@@ -281,8 +283,8 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 
 <dialog id="scanDialog" aria-label="Scan a code">
   <div class="close-row"><button type="button" data-close>Close</button></div>
-  <video id="scanVideo" playsinline muted></video>
-  <p class="hint">Point the camera at the code.</p>
+  <div class="viewfinder"><video id="scanVideo" playsinline muted></video></div>
+  <p class="hint">Point the camera at the code and hold still for a moment.</p>
 </dialog>
 
 <dialog id="viewer" aria-label="Photo">

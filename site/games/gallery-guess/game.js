@@ -1,6 +1,7 @@
 // Gallery Guess page logic. Rules are in logic.js, networking in ../../shared/mesh.js.
 import { Room, randomId, parseInvite, parseReply } from "../../shared/mesh.js";
 import { qrSvg } from "../../shared/qr.js";
+import { scanImage } from "../../shared/qr-scan.js";
 import * as G from "./logic.js";
 
 const $ = (id) => document.getElementById(id);
@@ -16,7 +17,8 @@ const session = {
 };
 const CROSS = `<svg viewBox="0 0 10 10" width="12" height="12" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const canScan = "BarcodeDetector" in window && !!navigator.mediaDevices?.getUserMedia;
+// in-page scanning works wherever there is a camera (https only); BarcodeDetector is used when present
+const canScan = !!navigator.mediaDevices?.getUserMedia;
 const bc = "BroadcastChannel" in window ? new BroadcastChannel("minigames-gallery-guess") : null;
 
 const room = new Room();
@@ -338,20 +340,33 @@ function startHandoff(code) {
   }, 2500);
 }
 
-// Camera scanning where the browser can decode QR codes itself (Chrome on Android, macOS).
+// Camera scanning: the browser's own QR reader where it has one (Chrome on Android, macOS),
+// otherwise our reader (shared/qr-scan.js) on downscaled video frames.
 async function scanCode() {
   const dlg = $("scanDialog"), video = $("scanVideo");
   let stream;
   dlg.showModal();
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
     video.srcObject = stream;
     await video.play();
-    const det = new BarcodeDetector({ formats: ["qr_code"] });
+    let det = null;
+    try { if ("BarcodeDetector" in window) det = new BarcodeDetector({ formats: ["qr_code"] }); } catch {}
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     while (dlg.open) {
-      const found = await det.detect(video).catch(() => []);
-      if (found[0]?.rawValue) return found[0].rawValue;
-      await new Promise((r) => setTimeout(r, 200));
+      let text = null;
+      if (det) text = (await det.detect(video).catch(() => []))[0]?.rawValue || null;
+      if (!text && video.videoWidth) {
+        const k = Math.min(1, 960 / Math.max(video.videoWidth, video.videoHeight));
+        canvas.width = Math.round(video.videoWidth * k);
+        canvas.height = Math.round(video.videoHeight * k);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        text = scanImage(frame.data, frame.width, frame.height);
+      }
+      if (text) { navigator.vibrate?.(60); return text; }
+      await new Promise((r) => setTimeout(r, 120));
     }
     return null;
   } catch (e) {

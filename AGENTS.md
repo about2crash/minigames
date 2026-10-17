@@ -27,6 +27,7 @@ site/                      everything that gets deployed
   shared/pwa.js            registers the service worker (include in every page with data-root)
   shared/mesh.js           serverless multiplayer rooms over WebRTC (see "Multiplayer" below)
   shared/qr.js             QR code generator (SVG), no dependencies
+  shared/qr-scan.js        QR code reader for camera frames (our codes: byte mode, level L/M)
   manifest.webmanifest     PWA manifest; the hub is the installable app (start_url ./)
   sw.js                    service worker: network-first with offline cache, precaches games.json games
   icons/                   PWA icons, drawn by `uv run minigames icons`
@@ -38,7 +39,7 @@ site/                      everything that gets deployed
 src/minigames/cli.py       `build`, `serve` and `icons` commands (standard library only)
 src/minigames/icons.py     stopwatch icon drawn with the standard library
 tests/test_site.py         page rules (head, relative paths, no raw colors), sw.js, games.json
-tests/js/*.test.mjs        node --test: QR codec, mesh room logic, game rules
+tests/js/*.test.mjs        node --test: QR codec and reader, mesh room logic, game rules
 .github/workflows/pages.yml  uv run minigames test -> build -> upload site/ -> deploy Pages
 ```
 
@@ -97,7 +98,8 @@ just tell a browser its public address; no game data passes through them).
 - **Joining**: a member shows an invite QR/link (`#j=` + compact WebRTC offer). The
   newcomer answers with a reply QR/link (`#r=`). The inviter scans it with the phone
   camera: the reply opens in a new tab, which hands it to the game tab over
-  `BroadcastChannel` (falls back to copy/paste). Any member can invite.
+  `BroadcastChannel` (falls back to copy/paste). Or either side scans in the page
+  (Scan buttons; needs https for the camera). Any member can invite.
 - **Mesh**: after that one manual exchange, everyone connects to everyone, with
   signaling relayed over the existing connections. Broken links heal the same way.
 - **Shared state**: `room.state` is owned by one leader and copied to all. Members send
