@@ -179,3 +179,18 @@ One phone per player over `shared/mesh.js`. Rules live in `logic.js` (tested).
   (without a server, a fresh page has no way to reach the others).
 - Owner secrecy: a phone knows who sent each photo (that's how it can reveal the
   owner); the UI never shows it before the reveal, but devtools could.
+
+### Odd Word Out (`site/games/odd-word-out/`)
+
+Social deduction, one device passed around. Rules in `logic.js`, word lists in `words.js` (tested).
+
+- Setup: 3–20 players, word language (English/Deutsch), categories, impostor count
+  (1 up to `maxImpostors`: always a clear majority knows the word), optional category hint for impostors.
+- Each round: a fresh word, impostors dealt at random; every player in turn sees a "pass to …"
+  screen, then their card (word + category, or "The impostor"). Then a random starting player
+  and the clue order; "Reveal" shows the impostor(s) and the word. Voting happens out loud.
+- Words: `words.js` has the same category ids in both languages, comma-separated lists. A word
+  listed in two categories only counts in the first. No repeats per tab: played words live in
+  `sessionStorage["minigames:odd-word-out:used"]` (`{ [lang]: [word] }`); when the chosen
+  categories run out they start over (noted on the result page).
+- Settings persist in `localStorage["minigames:odd-word-out:settings"]`.

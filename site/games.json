@@ -18,5 +18,17 @@
       "game.js",
       "logic.js"
     ]
+  },
+  {
+    "slug": "odd-word-out",
+    "url": "games/odd-word-out/",
+    "title": "Odd Word Out",
+    "tagline": "Everyone gets the secret word, except the impostor. One clue each, then vote out the bluffer.",
+    "players": "3\u201320 players, one device",
+    "order": 3,
+    "files": [
+      "logic.js",
+      "words.js"
+    ]
   }
 ]

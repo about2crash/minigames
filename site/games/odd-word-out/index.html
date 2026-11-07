@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="../../manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="../../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../../icons/apple-touch-icon.png">
+<script src="../../shared/pwa.js" data-root="../../"></script>
+<title>Odd Word Out</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="../../shared/theme.css">
+<style>
+/* Odd Word Out: pass one phone around; everyone sees the secret word except the impostor. */
+body.playing header { display: none; }
+.play-page { min-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); align-content: center; }
+
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper button { width: 44px; padding: 0; font-size: 1.3rem; }
+/* at the limit: greyed out so it's clear you can't add/remove another impostor */
+.stepper button:disabled, .players button:disabled, #addPlayer:disabled { opacity: .35; cursor: not-allowed; }
+.stepper output { font-family: var(--mono); font-size: 1.3rem; min-width: 2ch; text-align: center; }
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+
+.players { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.players li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 8px; align-items: center; }
+.players .num { font-family: var(--mono); color: var(--muted); text-align: right; }
+.players input { width: 100%; }
+
+.cats { display: flex; flex-wrap: wrap; gap: 8px; }
+.cats label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer; user-select: none; }
+.cats label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cats input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.cats .n { color: var(--muted); font-family: var(--mono); font-size: .8rem; }
+.linkish { border: 0; padding: 0; min-height: 32px; background: none; color: var(--muted); text-decoration: underline; font-size: .85rem; }
+
+/* Pass + card pages */
+.face { padding: 28px 20px; display: grid; gap: 16px; justify-items: center; text-align: center; user-select: none; }
+.face .meta { font-family: var(--mono); font-size: .85rem; opacity: .7; }
+.who { font-family: var(--display); font-size: clamp(2.4rem, 10vw, 4rem); font-weight: var(--display-weight);
+  text-transform: var(--display-case); line-height: 1; overflow-wrap: anywhere; }
+.face .hint { color: var(--face-fg); opacity: .75; max-width: 34ch; }
+.face .primary { width: min(100%, 360px); }
+.crumbs { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.crumbs i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--face-fg); opacity: .5; }
+.crumbs i.done { background: var(--face-fg); }
+.crumbs i.now { background: var(--accent); border-color: var(--accent); opacity: 1; }
+
+.card { width: min(100%, 360px); min-height: min(52dvh, 360px); border-radius: var(--radius-lg); display: grid;
+  align-content: center; justify-items: center; gap: 10px; padding: 24px 16px;
+  border: 3px solid var(--face-fg); background: var(--panel); color: var(--fg); }
+.card .word { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2.2rem, 11vw, 3.6rem); line-height: 1; overflow-wrap: anywhere; hyphens: auto; }
+.card.impostor { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.card .label { color: inherit; opacity: .75; }
+.card .sub { font-size: 1rem; }
+.card.flip { animation: flip .35s ease-out both; }
+@keyframes flip { from { transform: perspective(800px) rotateY(80deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .card.flip { animation: none; } }
+
+/* Discuss + result */
+.order { margin: 0; padding-left: 1.6em; display: grid; gap: 4px; }
+.order li.first { font-weight: 600; color: var(--accent); }
+.big { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2.2rem, 10vw, 3.6rem); line-height: 1; overflow-wrap: anywhere; }
+.big.accent { color: var(--accent); }
+.reveal-box { display: grid; gap: 6px; }
+.history { display: flex; flex-wrap: wrap; gap: 6px; }
+.notice { border: 2px solid var(--accent); border-radius: var(--radius); padding: 10px 12px; margin: 0; }
+
+.count-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 10px; }
+.count-pick button { min-height: 64px; font-family: var(--display); font-weight: var(--display-weight); font-size: 1.8rem; }
+.count-pick button:hover { border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 480px) {
+  .players li { grid-template-columns: 1.6em 1fr auto; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="back" href="../../">← All games</a>
+    <h1>Odd Word <span>Out</span></h1>
+    <p class="lede">Everyone gets the same secret word, except the impostor. Take turns saying one word about it, then vote: who is bluffing?</p>
+  </header>
+
+  <!-- PLAYER COUNT: first visit, no players saved yet -->
+  <section id="count" class="panel page" hidden>
+    <h2>How many players?</h2>
+    <div id="countPick" class="count-pick" role="group" aria-label="Number of players"></div>
+    <p class="hint">You can rename, add or remove players on the next screen.</p>
+  </section>
+
+  <!-- SETUP -->
+  <section id="setup" class="panel page" hidden>
+    <h2>Setup</h2>
+    <div class="settings">
+      <div class="field">
+        <span class="label" id="langLabel">Word language</span>
+        <div class="seg" id="langs" role="group" aria-labelledby="langLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label" id="impLabel">Impostors</span>
+        <div class="stepper" role="group" aria-labelledby="impLabel">
+          <button id="impMinus" type="button" aria-label="Fewer impostors">−</button>
+          <output id="impCount" aria-live="polite">1</output>
+          <button id="impPlus" type="button" aria-label="More impostors">+</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">Impostor hint</span>
+        <label class="toggle" for="hint">
+          <input id="hint" type="checkbox">
+          <span>Impostor sees the category</span>
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <span class="label">Players</span>
+      <ul id="playerList" class="players"></ul>
+      <div class="row">
+        <button id="addPlayer" type="button">+ Add player</button>
+      </div>
+    </div>
+    <div class="field">
+      <div class="row" style="justify-content: space-between">
+        <span class="label">Categories</span>
+        <span class="row" style="gap: 14px">
+          <button id="catsAll" class="linkish" type="button">All</button>
+          <button id="catsNone" class="linkish" type="button">None</button>
+        </span>
+      </div>
+      <div id="cats" class="cats"></div>
+      <p id="poolInfo" class="hint"></p>
+    </div>
+    <p id="setupError" class="hint" role="alert"></p>
+    <div class="row">
+      <button id="startGame" class="primary" type="button">Start game</button>
+    </div>
+    <p class="hint">No word comes up twice while this tab stays open. Pass the device on after each card; press <kbd>Space</kbd> or <kbd>Enter</kbd> on a keyboard.</p>
+  </section>
+
+  <!-- PASS: hand the device to the next player -->
+  <section id="pass" class="face play-page page" hidden>
+    <div class="meta" id="passMeta"></div>
+    <div class="crumbs" id="crumbs" aria-hidden="true"></div>
+    <span class="label" style="color: inherit; opacity: .7">Pass the phone to</span>
+    <div class="who" id="passWho"></div>
+    <p class="hint">Make sure nobody else can see the screen.</p>
+    <button id="showCard" class="primary" type="button"></button>
+  </section>
+
+  <!-- CARD: one player's role -->
+  <section id="card" class="face play-page page" hidden>
+    <div class="meta" id="cardWho"></div>
+    <div id="cardBox" class="card" aria-live="polite"></div>
+    <button id="hideCard" class="primary" type="button"></button>
+  </section>
+
+  <!-- DISCUSS -->
+  <section id="discuss" class="panel page" hidden>
+    <span class="label" id="discussMeta"></span>
+    <h2>Everyone has seen their card</h2>
+    <p class="hint">Go round in this order. Each player says <b>one word</b> that fits the secret word, without giving it away. Two rounds, then discuss and point at the impostor together.</p>
+    <div class="reveal-box">
+      <span class="label">Starts</span>
+      <div class="big accent" id="starter"></div>
+    </div>
+    <ol id="order" class="order"></ol>
+    <div class="row">
+      <button id="reveal" class="primary" type="button">Reveal the impostor</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="result" class="panel page" hidden>
+    <div class="reveal-box">
+      <span class="label" id="impTitle">The impostor was</span>
+      <div class="big accent" id="impNames"></div>
+    </div>
+    <div class="reveal-box">
+      <span class="label">The word was</span>
+      <div class="big" id="theWord"></div>
+      <p class="hint" id="theCat"></p>
+    </div>
+    <p class="hint">Impostor caught? The impostor can still win by guessing the word.</p>
+    <div class="row">
+      <button id="nextRound" class="primary" type="button">Next round, new word</button>
+      <button id="toSetup" type="button">Back to setup</button>
+    </div>
+    <div class="field">
+      <span class="label">Words this session</span>
+      <div id="history" class="history"></div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { LANGS, MIN_PLAYERS, MAX_PLAYERS, categories, pool, pickWord, wordsLeft, maxImpostors, dealImpostors, pickStarter } from "./logic.js";
+
+const $ = (id) => document.getElementById(id);
+const SETTINGS = "minigames:odd-word-out:settings";
+const USED = "minigames:odd-word-out:used"; // sessionStorage: { [lang]: [word, …] }, this tab only
+
+const load = (store, k, d) => { try { return JSON.parse(store.getItem(k)) ?? d; } catch { return d; } };
+const keep = (store, k, v) => { try { store.setItem(k, JSON.stringify(v)); } catch {} };
+
+const saved = load(localStorage, SETTINGS, {});
+const settings = {
+  lang: saved.lang in LANGS ? saved.lang : (navigator.language || "").startsWith("de") ? "de" : "en",
+  players: Array.isArray(saved.players) && saved.players.length >= MIN_PLAYERS ? saved.players.map(String) : [],
+  impostors: Number.isFinite(saved.impostors) ? saved.impostors : 1,
+  hint: saved.hint ?? true,
+  cats: Array.isArray(saved.cats) ? saved.cats : categories("en").map((c) => c.id),
+};
+const save = () => keep(localStorage, SETTINGS, settings);
+const usedWords = () => load(sessionStorage, USED, {});
+
+let game = null; // { names, impostors: [i], word, cat, starter, turn, round, history: [] }
+let rounds = 0;
+const history = load(sessionStorage, USED + ":history", []);
+
+// ---------- setup ----------
+function renderLangs() {
+  const box = $("langs");
+  box.innerHTML = "";
+  for (const [id, name] of Object.entries(LANGS)) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = name; b.setAttribute("aria-pressed", String(settings.lang === id));
+    b.addEventListener("click", () => { settings.lang = id; save(); renderLangs(); renderCats(); });
+    box.append(b);
+  }
+}
+
+function renderCats() {
+  const box = $("cats");
+  box.innerHTML = "";
+  for (const c of categories(settings.lang)) {
+    const l = document.createElement("label");
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.checked = settings.cats.includes(c.id);
+    inp.addEventListener("change", () => {
+      settings.cats = inp.checked ? [...new Set([...settings.cats, c.id])] : settings.cats.filter((x) => x !== c.id);
+      save(); renderPool();
+    });
+    const n = document.createElement("span");
+    n.className = "n"; n.textContent = c.words.length;
+    l.append(inp, document.createTextNode(c.name), n);
+    box.append(l);
+  }
+  renderPool();
+}
+
+function renderPool() {
+  const total = pool(settings.lang, settings.cats).length;
+  const left = wordsLeft(settings.lang, settings.cats, usedWords()[settings.lang]);
+  const none = !categories(settings.lang).some((c) => settings.cats.includes(c.id));
+  $("poolInfo").textContent = (none ? "No category picked, so all of them are used. " : "") +
+    `${left} of ${total} words not played yet.`;
+}
+
+function renderPlayers() {
+  const ul = $("playerList");
+  ul.innerHTML = "";
+  settings.players.forEach((name, i) => {
+    const li = document.createElement("li");
+    const num = document.createElement("span");
+    num.className = "num"; num.textContent = i + 1;
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.value = name; inp.maxLength = 24; inp.enterKeyHint = "next";
+    inp.setAttribute("aria-label", `Player ${i + 1} name`);
+    inp.addEventListener("input", () => { settings.players[i] = inp.value; save(); });
+    const del = document.createElement("button");
+    del.type = "button"; del.textContent = "Remove";
+    del.disabled = settings.players.length <= MIN_PLAYERS;
+    del.addEventListener("click", () => { settings.players.splice(i, 1); save(); renderPlayers(); });
+    li.append(num, inp, del);
+    ul.append(li);
+  });
+  $("addPlayer").disabled = settings.players.length >= MAX_PLAYERS;
+  renderImpostors();
+}
+
+function renderImpostors() {
+  const max = maxImpostors(settings.players.length);
+  settings.impostors = Math.min(Math.max(1, settings.impostors), max);
+  $("impCount").textContent = settings.impostors;
+  $("impMinus").disabled = settings.impostors <= 1;
+  $("impPlus").disabled = settings.impostors >= max;
+}
+
+$("addPlayer").addEventListener("click", () => {
+  settings.players.push(`Player ${settings.players.length + 1}`);
+  save(); renderPlayers();
+  $("playerList").lastElementChild.querySelector("input").select();
+});
+$("impMinus").addEventListener("click", () => { settings.impostors--; save(); renderImpostors(); });
+$("impPlus").addEventListener("click", () => { settings.impostors++; save(); renderImpostors(); });
+$("hint").checked = settings.hint;
+$("hint").addEventListener("change", () => { settings.hint = $("hint").checked; save(); });
+$("catsAll").addEventListener("click", () => { settings.cats = categories(settings.lang).map((c) => c.id); save(); renderCats(); });
+$("catsNone").addEventListener("click", () => { settings.cats = []; save(); renderCats(); });
+
+// ---------- pages ----------
+const PAGES = ["count", "setup", "pass", "card", "discuss", "result"];
+function show(id) {
+  for (const p of PAGES) $(p).hidden = p !== id;
+  document.body.classList.toggle("playing", id !== "setup" && id !== "count");
+  window.scrollTo(0, 0);
+  const main = { pass: "showCard", card: "hideCard", discuss: "reveal", result: "nextRound" }[id];
+  if (main) $(main).focus({ preventScroll: true });
+}
+
+function startGame() {
+  const names = settings.players.map((n, i) => n.trim() || `Player ${i + 1}`);
+  const dupes = names.filter((n, i) => names.findIndex((m) => m.toLowerCase() === n.toLowerCase()) !== i);
+  if (dupes.length) { $("setupError").textContent = `Two players are called “${dupes[0]}”. Give everyone a different name.`; return; }
+  $("setupError").textContent = "";
+  rounds = 0;
+  newRound(names);
+}
+
+function newRound(names) {
+  const used = usedWords();
+  const pick = pickWord(settings.lang, settings.cats, used[settings.lang]);
+  used[settings.lang] = pick.used;
+  keep(sessionStorage, USED, used);
+  rounds++;
+  game = {
+    names,
+    impostors: dealImpostors(names.length, settings.impostors),
+    word: pick.word, cat: pick.cat, reset: pick.reset,
+    starter: pickStarter(names.length),
+    turn: 0,
+  };
+  showPass();
+}
+
+function showPass() {
+  const { names, turn } = game;
+  $("passMeta").textContent = `Round ${rounds} · card ${turn + 1} of ${names.length}`;
+  $("passWho").textContent = names[turn];
+  $("showCard").textContent = `I'm ${names[turn]}, show my card`;
+  const crumbs = $("crumbs");
+  crumbs.innerHTML = "";
+  names.forEach((_, i) => { const d = document.createElement("i"); if (i < turn) d.className = "done"; if (i === turn) d.className = "now"; crumbs.append(d); });
+  show("pass");
+}
+
+function showCard() {
+  const { names, turn } = game;
+  const box = $("cardBox");
+  const imp = game.impostors.includes(turn);
+  box.className = "card flip" + (imp ? " impostor" : "");
+  box.innerHTML = "";
+  const add = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; el.textContent = text; box.append(el); };
+  if (imp) {
+    add("span", "label", "You are");
+    add("div", "word", "The impostor");
+    if (settings.hint) add("p", "sub", `Category: ${game.cat}`);
+    add("p", "sub", game.impostors.length > 1 ? `There are ${game.impostors.length} impostors. Blend in and find out the word.` : "Blend in and find out the word.");
+  } else {
+    add("span", "label", "The secret word");
+    add("div", "word", game.word);
+    add("p", "sub", game.cat);
+  }
+  box.lang = settings.lang;
+  $("cardWho").textContent = names[turn];
+  $("hideCard").textContent = turn + 1 < names.length ? `Hide, pass to ${names[turn + 1]}` : "Hide, everyone's done";
+  show("card");
+}
+
+function hideCard() {
+  game.turn++;
+  if (game.turn < game.names.length) showPass();
+  else showDiscuss();
+}
+
+function showDiscuss() {
+  const { names, starter } = game;
+  $("discussMeta").textContent = `Round ${rounds}`;
+  $("starter").textContent = names[starter];
+  const ol = $("order");
+  ol.innerHTML = "";
+  for (let k = 0; k < names.length; k++) {
+    const li = document.createElement("li");
+    li.textContent = names[(starter + k) % names.length];
+    if (k === 0) li.className = "first";
+    ol.append(li);
+  }
+  show("discuss");
+}
+
+function showResult() {
+  const imps = game.impostors.map((i) => game.names[i]);
+  $("impTitle").textContent = imps.length > 1 ? "The impostors were" : "The impostor was";
+  $("impNames").textContent = imps.join(" & ");
+  $("theWord").textContent = game.word;
+  $("theWord").lang = settings.lang;
+  $("theCat").textContent = game.cat + (game.reset ? " · every word of these categories has been played, so they started over" : "");
+  history.push(game.word);
+  keep(sessionStorage, USED + ":history", history.slice(-200));
+  const h = $("history");
+  h.innerHTML = "";
+  for (const w of history.slice(-40).reverse()) {
+    const c = document.createElement("span");
+    c.className = "chip"; c.textContent = w;
+    h.append(c);
+  }
+  show("result");
+}
+
+$("startGame").addEventListener("click", startGame);
+$("showCard").addEventListener("click", showCard);
+$("hideCard").addEventListener("click", hideCard);
+$("reveal").addEventListener("click", showResult);
+$("nextRound").addEventListener("click", () => newRound(game.names));
+$("toSetup").addEventListener("click", () => { renderPool(); show("setup"); });
+
+// Space/Enter drives the main button on every page except setup (where you type names).
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" && e.code !== "Enter" && e.code !== "NumpadEnter") return;
+  if (!$("setup").hidden || e.target.closest?.("button:not(.primary), input, a")) return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const page = PAGES.find((p) => !$(p).hidden);
+  const main = { pass: "showCard", card: "hideCard", discuss: "reveal", result: "nextRound" }[page];
+  if (main) $(main).click();
+});
+
+renderLangs();
+renderCats();
+// First visit (no players saved): ask how many play, then name them Player 1, Player 2, …
+for (let n = MIN_PLAYERS; n <= 12; n++) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = n;
+  b.setAttribute("aria-label", `${n} players`);
+  b.addEventListener("click", () => {
+    settings.players = Array.from({ length: n }, (_, i) => `Player ${i + 1}`);
+    save(); renderPlayers(); show("setup");
+  });
+  $("countPick").append(b);
+}
+renderPlayers();
+show(settings.players.length ? "setup" : "count");
+if (!settings.players.length) $("countPick").firstElementChild.focus({ preventScroll: true });
+</script>
+</body>
+</html>
