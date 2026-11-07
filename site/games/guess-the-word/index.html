@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="../../manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="../../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../../icons/apple-touch-icon.png">
+<script src="../../shared/pwa.js" data-root="../../"></script>
+<title>Guess the Word</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="../../shared/theme.css">
+<style>
+/* Guess the Word: phone on the forehead, the others describe, tilt down = got it, tilt up = pass. */
+body.playing header { display: none; }
+.play-page { min-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); align-content: center; }
+
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+button:disabled { opacity: .35; cursor: not-allowed; }
+
+.count-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 10px; }
+.count-pick button { min-height: 64px; font-family: var(--display); font-weight: var(--display-weight); font-size: 1.8rem; }
+.count-pick button:hover { border-color: var(--accent); color: var(--accent); }
+
+.players { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.players li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 8px; align-items: center; }
+.players .num { font-family: var(--mono); color: var(--muted); text-align: right; }
+.players input { width: 100%; }
+
+.cats { display: flex; flex-wrap: wrap; gap: 8px; }
+.cats label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer; user-select: none; }
+.cats label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cats input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.cats .n { color: var(--muted); font-family: var(--mono); font-size: .8rem; }
+.linkish { border: 0; padding: 0; min-height: 32px; background: none; color: var(--muted); text-decoration: underline; font-size: .85rem; }
+
+/* Ready page */
+.face { padding: 28px 20px; display: grid; gap: 16px; justify-items: center; text-align: center; }
+.face .meta { font-family: var(--mono); font-size: .85rem; opacity: .7; }
+.face .hint { color: var(--face-fg); opacity: .8; max-width: 38ch; }
+.face .primary { width: min(100%, 360px); }
+.who { font-family: var(--display); font-size: clamp(2.4rem, 10vw, 4rem); font-weight: var(--display-weight);
+  text-transform: var(--display-case); line-height: 1; overflow-wrap: anywhere; }
+.how { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(100%, 420px); }
+.how div { border: 1px solid color-mix(in srgb, var(--face-fg) 30%, transparent); border-radius: var(--radius); padding: 10px; }
+.how b { display: block; font-family: var(--display); font-size: 1.4rem; text-transform: var(--display-case); }
+.how .ok b { color: var(--good); }
+.how .skip b { color: var(--accent); }
+
+/* Play: the whole screen, readable from across the room */
+.play { position: fixed; inset: 0; z-index: 10; background: var(--face); color: var(--face-fg);
+  display: grid; place-items: center; text-align: center; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; overflow: hidden; touch-action: none;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+.play-top { position: absolute; top: max(8px, env(safe-area-inset-top)); left: 0; right: 0; z-index: 3;
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right)); pointer-events: none; }
+.play-top > * { pointer-events: auto; }
+.clock { font-family: var(--mono); font-weight: 600; font-size: clamp(1.4rem, 5vmin, 2.4rem); font-variant-numeric: tabular-nums; }
+.clock.low { color: var(--accent); }
+.play-top .end { color: var(--face-fg); border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); }
+.play-mid { display: grid; gap: 1.5vmin; justify-items: center; max-width: 100%; padding-inline: 4vw; z-index: 1; pointer-events: none; }
+.play-word { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2.6rem, min(13vw, 22vh), 10rem); line-height: .95; overflow-wrap: anywhere; hyphens: auto; text-wrap: balance; }
+.play-cat { font-size: clamp(.9rem, 3vmin, 1.3rem); opacity: .7; }
+.zone { position: absolute; top: 0; bottom: 0; width: 33.4%; z-index: 2; border: 0; border-radius: 0; background: transparent;
+  color: var(--face-fg); display: flex; align-items: flex-end; justify-content: center; padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+.zone span { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; opacity: .45; }
+.zone.left { left: 0; }
+.zone.right { right: 0; }
+.zone:active { background: color-mix(in srgb, var(--face-fg) 8%, transparent); }
+.play.counting .zone { display: none; }
+.flash { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center;
+  font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(3rem, min(16vw, 26vh), 12rem); animation: flash-in .15s ease-out both; }
+.flash.ok { background: var(--good); color: var(--face); }
+.flash.skip { background: var(--accent); color: var(--accent-fg); }
+.flash.over { background: var(--face); color: var(--face-fg); }
+@keyframes flash-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
+
+/* Results */
+.words { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.words li { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.words li.ok { border-color: var(--good); color: var(--good); font-weight: 600; }
+.words li.skip { color: var(--muted); text-decoration: line-through; }
+.big { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2.4rem, 10vw, 4rem); line-height: 1; }
+.big.accent { color: var(--accent); }
+.table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.table td { padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.table td:last-child { text-align: right; font-family: var(--mono); font-weight: 600; }
+.table td:first-child { width: 2.5em; color: var(--muted); font-family: var(--mono); }
+.table tr.top td { color: var(--accent); font-weight: 600; }
+
+@media (max-width: 480px) {
+  .players li { grid-template-columns: 1.6em 1fr auto; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="back" href="../../">← All games</a>
+    <h1>Guess the <span>Word</span></h1>
+    <p class="lede">Hold the phone to your forehead. The others describe the word you can't see. Tilt down when you get it, tilt up to pass.</p>
+  </header>
+
+  <!-- PLAYER COUNT: first visit, no players saved yet -->
+  <section id="count" class="panel page" hidden>
+    <h2>How many players?</h2>
+    <div id="countPick" class="count-pick" role="group" aria-label="Number of players"></div>
+    <p class="hint">You can rename, add or remove players on the next screen.</p>
+  </section>
+
+  <!-- SETUP -->
+  <section id="setup" class="panel page" hidden>
+    <h2>Setup</h2>
+    <div class="settings">
+      <div class="field">
+        <span class="label" id="langLabel">Word language</span>
+        <div class="seg" id="langs" role="group" aria-labelledby="langLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label" id="timeLabel">Time per turn</span>
+        <div class="seg" id="times" role="group" aria-labelledby="timeLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label">Controls</span>
+        <label class="toggle" for="tilt">
+          <input id="tilt" type="checkbox">
+          <span>Tilt the phone to answer</span>
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <span class="label">Players (each takes a turn guessing)</span>
+      <ul id="playerList" class="players"></ul>
+      <div class="row">
+        <button id="addPlayer" type="button">+ Add player</button>
+      </div>
+    </div>
+    <div class="field">
+      <div class="row" style="justify-content: space-between">
+        <span class="label">Categories</span>
+        <span class="row" style="gap: 14px">
+          <button id="catsAll" class="linkish" type="button">All</button>
+          <button id="catsNone" class="linkish" type="button">None</button>
+        </span>
+      </div>
+      <div id="cats" class="cats"></div>
+      <p id="poolInfo" class="hint"></p>
+    </div>
+    <p id="setupError" class="hint" role="alert"></p>
+    <div class="row">
+      <button id="startGame" class="primary" type="button">Start game</button>
+    </div>
+    <p class="hint">Without tilting (or on a laptop): tap the right third of the screen for “got it”, the left third to pass, or use the arrow keys. No word comes up twice while this tab stays open.</p>
+  </section>
+
+  <!-- READY: next guesser -->
+  <section id="ready" class="face play-page page" hidden>
+    <div class="meta" id="readyMeta"></div>
+    <span class="label" style="color: inherit; opacity: .7">Guessing now</span>
+    <div class="who" id="readyWho"></div>
+    <div class="how">
+      <div class="ok"><b id="howOk">Tilt down</b>got it</div>
+      <div class="skip"><b id="howSkip">Tilt up</b>pass</div>
+    </div>
+    <p class="hint" id="readyHint"></p>
+    <button id="go" class="primary" type="button">Start</button>
+  </section>
+
+  <!-- TURN RESULT -->
+  <section id="turnEnd" class="panel page" hidden>
+    <span class="label" id="turnEndMeta"></span>
+    <div class="row" style="align-items: baseline; gap: 14px">
+      <div class="big accent" id="turnPoints"></div>
+      <h2 id="turnWho"></h2>
+    </div>
+    <ul id="turnWords" class="words"></ul>
+    <div class="row">
+      <button id="nextTurn" class="primary" type="button"></button>
+      <button id="quit" type="button">Back to setup</button>
+    </div>
+  </section>
+
+  <!-- FINAL -->
+  <section id="final" class="panel page" hidden>
+    <span class="label" id="finalLabel">Winner</span>
+    <div class="big accent" id="winner"></div>
+    <table class="table" id="scoreTable"></table>
+    <div class="row">
+      <button id="again" class="primary" type="button">Play again</button>
+      <button id="toSetup" type="button">Back to setup</button>
+    </div>
+  </section>
+</main>
+
+<!-- PLAY: full screen while a turn runs -->
+<section id="play" class="play" hidden>
+  <div class="play-top">
+    <button id="endTurn" class="end" type="button">End</button>
+    <span class="clock" id="clock"></span>
+    <span class="clock" id="playScore"></span>
+  </div>
+  <div class="play-mid">
+    <div class="play-word" id="playWord"></div>
+    <div class="play-cat" id="playCat"></div>
+  </div>
+  <button id="tapPass" class="zone left" type="button" aria-label="Pass"><span>Pass</span></button>
+  <button id="tapOk" class="zone right" type="button" aria-label="Got it"><span>Got it</span></button>
+  <div id="flash" class="flash" hidden></div>
+</section>
+
+<script type="module">
+import { LANGS, MIN_PLAYERS, MAX_PLAYERS, TURN_SECONDS, COUNTDOWN_MS, categories, pool, pickWord, wordsLeft, screenUp, tiltTracker, turnScore, standings } from "./logic.js";
+
+const $ = (id) => document.getElementById(id);
+const SETTINGS = "minigames:guess-the-word:settings";
+const USED = "minigames:guess-the-word:used"; // sessionStorage: { [lang]: [word, …] }, this tab only
+
+const load = (store, k, d) => { try { return JSON.parse(store.getItem(k)) ?? d; } catch { return d; } };
+const keep = (store, k, v) => { try { store.setItem(k, JSON.stringify(v)); } catch {} };
+
+const saved = load(localStorage, SETTINGS, {});
+const settings = {
+  lang: saved.lang in LANGS ? saved.lang : (navigator.language || "").startsWith("de") ? "de" : "en",
+  players: Array.isArray(saved.players) && saved.players.length >= MIN_PLAYERS ? saved.players.map(String) : [],
+  seconds: TURN_SECONDS.includes(saved.seconds) ? saved.seconds : 60,
+  tilt: saved.tilt ?? true,
+  cats: Array.isArray(saved.cats) ? saved.cats : categories("en").map((c) => c.id),
+};
+const save = () => keep(localStorage, SETTINGS, settings);
+const usedWords = () => load(sessionStorage, USED, {});
+
+let game = null; // { names, scores, turn }
+let turn = null; // { results, word, cat, endAt, timer, busy, tracker }
+
+// ---------- setup ----------
+function seg(box, options, current, onPick) {
+  box.innerHTML = "";
+  for (const [value, text] of options) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.setAttribute("aria-pressed", String(value === current));
+    b.addEventListener("click", () => onPick(value));
+    box.append(b);
+  }
+}
+function renderLangs() {
+  seg($("langs"), Object.entries(LANGS), settings.lang, (v) => { settings.lang = v; save(); renderLangs(); renderCats(); });
+}
+function renderTimes() {
+  seg($("times"), TURN_SECONDS.map((s) => [s, `${s} s`]), settings.seconds, (v) => { settings.seconds = v; save(); renderTimes(); });
+}
+
+function renderCats() {
+  const box = $("cats");
+  box.innerHTML = "";
+  for (const c of categories(settings.lang)) {
+    const l = document.createElement("label");
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.checked = settings.cats.includes(c.id);
+    inp.addEventListener("change", () => {
+      settings.cats = inp.checked ? [...new Set([...settings.cats, c.id])] : settings.cats.filter((x) => x !== c.id);
+      save(); renderPool();
+    });
+    const n = document.createElement("span");
+    n.className = "n"; n.textContent = c.words.length;
+    l.append(inp, document.createTextNode(c.name), n);
+    box.append(l);
+  }
+  renderPool();
+}
+function renderPool() {
+  const total = pool(settings.lang, settings.cats).length;
+  const left = wordsLeft(settings.lang, settings.cats, usedWords()[settings.lang]);
+  const none = !categories(settings.lang).some((c) => settings.cats.includes(c.id));
+  $("poolInfo").textContent = (none ? "No category picked, so all of them are used. " : "") + `${left} of ${total} words not played yet.`;
+}
+
+function renderPlayers() {
+  const ul = $("playerList");
+  ul.innerHTML = "";
+  settings.players.forEach((name, i) => {
+    const li = document.createElement("li");
+    const num = document.createElement("span");
+    num.className = "num"; num.textContent = i + 1;
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.value = name; inp.maxLength = 24;
+    inp.setAttribute("aria-label", `Player ${i + 1} name`);
+    inp.addEventListener("input", () => { settings.players[i] = inp.value; save(); });
+    const del = document.createElement("button");
+    del.type = "button"; del.textContent = "Remove";
+    del.disabled = settings.players.length <= MIN_PLAYERS;
+    del.addEventListener("click", () => { settings.players.splice(i, 1); save(); renderPlayers(); });
+    li.append(num, inp, del);
+    ul.append(li);
+  });
+  $("addPlayer").disabled = settings.players.length >= MAX_PLAYERS;
+}
+
+$("addPlayer").addEventListener("click", () => {
+  settings.players.push(`Player ${settings.players.length + 1}`);
+  save(); renderPlayers();
+  $("playerList").lastElementChild.querySelector("input").select();
+});
+$("tilt").checked = settings.tilt;
+$("tilt").addEventListener("change", () => { settings.tilt = $("tilt").checked; save(); });
+$("catsAll").addEventListener("click", () => { settings.cats = categories(settings.lang).map((c) => c.id); save(); renderCats(); });
+$("catsNone").addEventListener("click", () => { settings.cats = []; save(); renderCats(); });
+
+// ---------- pages ----------
+const PAGES = ["count", "setup", "ready", "turnEnd", "final"];
+const MAIN = { ready: "go", turnEnd: "nextTurn", final: "again" };
+function show(id) {
+  for (const p of PAGES) $(p).hidden = p !== id;
+  document.body.classList.toggle("playing", id !== "setup" && id !== "count");
+  window.scrollTo(0, 0);
+  if (MAIN[id]) $(MAIN[id]).focus({ preventScroll: true });
+}
+
+function startGame() {
+  const names = settings.players.map((n, i) => n.trim() || `Player ${i + 1}`);
+  $("setupError").textContent = "";
+  game = { names, scores: names.map(() => 0), turn: 0 };
+  showReady();
+}
+
+function showReady() {
+  const { names, turn: t } = game;
+  $("readyMeta").textContent = names.length > 1 ? `Turn ${t + 1} of ${names.length} · ${settings.seconds} s` : `${settings.seconds} s`;
+  $("readyWho").textContent = names[t];
+  $("howOk").textContent = settings.tilt ? "Tilt down" : "Tap right";
+  $("howSkip").textContent = settings.tilt ? "Tilt up" : "Tap left";
+  $("readyHint").textContent = settings.tilt
+    ? "Hold the phone sideways on your forehead, screen facing the others. You can also tap the right or left edge."
+    : "Hold the phone sideways on your forehead, screen facing the others, and tap its edges. Or let someone else hold it.";
+  show("ready");
+}
+
+// ---------- sensors, sound, screen ----------
+let sensorOn = false;
+let lastUp = null;
+window.addEventListener("deviceorientation", (e) => {
+  const up = screenUp(e.beta, e.gamma);
+  if (up == null) return;
+  lastUp = up;
+  if (turn?.tracker && !turn.counting && !turn.busy) {
+    const a = turn.tracker(up);
+    if (a) answer(a === "correct");
+  } else if (turn?.tracker) {
+    turn.tracker(up); // keep track while counting down / flashing, so "upright" arms it
+  }
+});
+async function askSensor() {
+  // iOS asks once per site; must be called straight from a tap
+  const D = window.DeviceOrientationEvent;
+  if (D && typeof D.requestPermission === "function") {
+    try { sensorOn = (await D.requestPermission()) === "granted"; } catch { sensorOn = false; }
+  } else sensorOn = !!D;
+}
+
+let audio = null;
+function beep(freq, ms) {
+  try {
+    audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = freq; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(0.15, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + ms / 1000);
+    o.start(); o.stop(audio.currentTime + ms / 1000);
+  } catch {}
+}
+const buzz = (p) => { try { navigator.vibrate?.(p); } catch {} };
+
+let wakeLock = null;
+async function bigScreen(on) {
+  try {
+    if (on) {
+      wakeLock = await navigator.wakeLock?.request("screen");
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+        await screen.orientation?.lock?.("landscape").catch(() => {});
+      }
+    } else {
+      wakeLock?.release?.(); wakeLock = null;
+      screen.orientation?.unlock?.();
+      if (document.fullscreenElement) await document.exitFullscreen();
+    }
+  } catch {}
+}
+
+// ---------- a turn ----------
+async function go() {
+  const tilt = settings.tilt;
+  const sensorAsk = tilt ? askSensor() : null; // first, while we're still inside the tap
+  beep(0, 1); // unlocks audio on iOS
+  bigScreen(true);
+  if (sensorAsk) await sensorAsk;
+  turn = { results: [], counting: true, busy: false, tracker: tilt && sensorOn ? tiltTracker() : null };
+  $("play").hidden = false;
+  $("play").classList.add("counting");
+  $("playScore").textContent = "";
+  $("clock").textContent = "";
+  $("clock").classList.remove("low");
+  $("playCat").textContent = tilt && sensorOn ? "Phone on your forehead" : "Get ready";
+  const t0 = performance.now();
+  const tick = () => {
+    if (!turn) return;
+    const left = Math.ceil((COUNTDOWN_MS - (performance.now() - t0)) / 1000);
+    if (left > 0) {
+      if ($("playWord").textContent !== String(left)) { $("playWord").textContent = left; beep(440, 90); }
+      turn.timer = setTimeout(tick, 50);
+    } else startClock();
+  };
+  tick();
+}
+
+function startClock() {
+  turn.counting = false;
+  $("play").classList.remove("counting");
+  turn.endAt = performance.now() + settings.seconds * 1000;
+  nextWord();
+  let lastSec = null;
+  const tick = () => {
+    if (!turn) return;
+    const ms = turn.endAt - performance.now();
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    $("clock").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    $("clock").classList.toggle("low", s <= 10);
+    if (s !== lastSec && s <= 5 && s > 0) beep(660, 60);
+    lastSec = s;
+    if (ms <= 0) return timeUp();
+    turn.timer = setTimeout(tick, 100);
+  };
+  tick();
+}
+
+function nextWord() {
+  const used = usedWords();
+  const pick = pickWord(settings.lang, settings.cats, used[settings.lang]);
+  used[settings.lang] = pick.used;
+  keep(sessionStorage, USED, used);
+  turn.word = pick.word;
+  $("playWord").textContent = pick.word;
+  $("playWord").lang = settings.lang;
+  $("playCat").textContent = pick.cat;
+}
+
+function flash(cls, text, ms) {
+  const f = $("flash");
+  f.className = `flash ${cls}`; f.textContent = text; f.hidden = false;
+  return new Promise((r) => setTimeout(() => { f.hidden = true; r(); }, ms));
+}
+
+async function answer(ok) {
+  if (!turn || turn.counting || turn.busy) return;
+  turn.busy = true;
+  turn.results.push({ word: turn.word, ok });
+  $("playScore").textContent = turnScore(turn.results);
+  beep(ok ? 880 : 220, ok ? 180 : 250);
+  buzz(ok ? 60 : [40, 60, 40]);
+  await flash(ok ? "ok" : "skip", ok ? "Got it!" : "Pass", 650);
+  if (!turn || performance.now() >= turn.endAt) return; // time ran out meanwhile: timeUp() takes over
+  turn.busy = false;
+  nextWord();
+}
+
+async function timeUp() {
+  if (!turn) return;
+  clearTimeout(turn.timer);
+  turn.busy = true;
+  beep(330, 500); buzz(300);
+  await flash("over", "Time's up", 1200);
+  endTurn();
+}
+
+function endTurn() {
+  if (!turn) return;
+  clearTimeout(turn.timer);
+  const results = turn.results;
+  turn = null;
+  $("play").hidden = true;
+  $("flash").hidden = true;
+  bigScreen(false);
+  const pts = turnScore(results);
+  game.scores[game.turn] += pts;
+  const multi = game.names.length > 1;
+  $("turnEndMeta").textContent = multi ? `Turn ${game.turn + 1} of ${game.names.length}` : "";
+  $("turnPoints").textContent = pts;
+  $("turnWho").textContent = `${pts === 1 ? "word" : "words"} for ${game.names[game.turn]}`;
+  const ul = $("turnWords");
+  ul.innerHTML = "";
+  for (const r of results) {
+    const li = document.createElement("li");
+    li.className = r.ok ? "ok" : "skip"; li.textContent = r.word;
+    ul.append(li);
+  }
+  if (!results.length) { const li = document.createElement("li"); li.textContent = "No words this time"; ul.append(li); }
+  const last = game.turn + 1 >= game.names.length;
+  $("nextTurn").textContent = last ? (multi ? "See the scores" : "Play again") : `Next: ${game.names[game.turn + 1]}`;
+  show("turnEnd");
+}
+
+function nextTurn() {
+  game.turn++;
+  if (game.turn < game.names.length) return showReady();
+  if (game.names.length === 1) return startGame();
+  const rows = standings(game.names, game.scores);
+  const winners = rows.filter((r) => r.place === 1);
+  $("finalLabel").textContent = winners.length > 1 ? "Tie" : "Winner";
+  $("winner").textContent = winners.map((r) => r.name).join(" & ");
+  const table = $("scoreTable");
+  table.innerHTML = "";
+  for (const r of rows) {
+    const tr = table.insertRow();
+    if (r.place === 1) tr.className = "top";
+    for (const v of [`${r.place}.`, r.name, r.score]) tr.insertCell().textContent = v;
+  }
+  show("final");
+}
+
+$("startGame").addEventListener("click", startGame);
+$("go").addEventListener("click", go);
+$("tapOk").addEventListener("pointerdown", (e) => { e.preventDefault(); answer(true); });
+$("tapPass").addEventListener("pointerdown", (e) => { e.preventDefault(); answer(false); });
+$("endTurn").addEventListener("click", endTurn);
+$("nextTurn").addEventListener("click", nextTurn);
+$("quit").addEventListener("click", () => { renderPool(); show("setup"); });
+$("again").addEventListener("click", startGame);
+$("toSetup").addEventListener("click", () => { renderPool(); show("setup"); });
+
+window.addEventListener("keydown", (e) => {
+  if (!$("play").hidden) {
+    if (e.repeat) return;
+    if (e.code === "ArrowRight" || e.code === "Enter" || e.code === "ArrowDown") { e.preventDefault(); answer(true); }
+    else if (e.code === "ArrowLeft" || e.code === "Space" || e.code === "ArrowUp") { e.preventDefault(); answer(false); }
+    else if (e.code === "Escape") endTurn();
+    return;
+  }
+  if (e.code !== "Space" && e.code !== "Enter" && e.code !== "NumpadEnter") return;
+  if (!$("setup").hidden || !$("count").hidden || e.target.closest?.("button:not(.primary), input, a")) return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const page = PAGES.find((p) => !$(p).hidden);
+  if (MAIN[page]) $(MAIN[page]).click();
+});
+
+// Leaving fullscreen with the system back gesture shouldn't strand a running turn.
+document.addEventListener("visibilitychange", () => { if (document.hidden && turn) endTurn(); });
+
+// First visit (no players saved): ask how many play, then name them Player 1, Player 2, …
+for (let n = 2; n <= 12; n++) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = n;
+  b.setAttribute("aria-label", `${n} players`);
+  b.addEventListener("click", () => {
+    settings.players = Array.from({ length: n }, (_, i) => `Player ${i + 1}`);
+    save(); renderPlayers(); show("setup");
+  });
+  $("countPick").append(b);
+}
+renderLangs();
+renderTimes();
+renderCats();
+renderPlayers();
+show(settings.players.length ? "setup" : "count");
+</script>
+</body>
+</html>

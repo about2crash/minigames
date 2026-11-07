@@ -21,6 +21,7 @@ uv run minigames test             # Python checks + JavaScript tests (needs Node
 | [Second Shot](site/games/second-shot/) | Click twice exactly N seconds apart. Furthest off is out each round; an exact hit wins instantly. Keeps a GOAT record per target time. |
 | [Gallery Guess](site/games/gallery-guess/) | Everyone picks photos from their camera roll; guess whose photo it is, fast. One phone each: join by scanning a QR code, phones connect peer to peer, no server. |
 | [Odd Word Out](site/games/odd-word-out/) | Pass one phone around: everyone sees the secret word except the impostor(s). One clue each, then vote. Over 1000 words each in German and English, 17 categories; no word repeats in a session. |
+| [Guess the Word](site/games/guess-the-word/) | Phone on your forehead, the others describe the word. Tilt down when you get it, tilt up to pass (or tap the screen edges). Same word lists, timed turns, scores. |
 
 ## Deploy to GitHub Pages
 

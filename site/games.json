@@ -27,8 +27,18 @@
     "players": "3\u201320 players, one device",
     "order": 3,
     "files": [
-      "logic.js",
-      "words.js"
+      "logic.js"
+    ]
+  },
+  {
+    "slug": "guess-the-word",
+    "url": "games/guess-the-word/",
+    "title": "Guess the Word",
+    "tagline": "Phone on your forehead, the others describe. Tilt down if you got it, tilt up to pass.",
+    "players": "2+ players, one phone",
+    "order": 4,
+    "files": [
+      "logic.js"
     ]
   }
 ]

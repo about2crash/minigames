@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as G from "../../site/games/odd-word-out/logic.js";
-import { WORDS } from "../../site/games/odd-word-out/words.js";
+import { WORDS } from "../../site/shared/words.js";
 
 function seeded(seed = 1) {
   return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };

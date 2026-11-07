@@ -28,6 +28,7 @@ site/                      everything that gets deployed
   shared/mesh.js           serverless multiplayer rooms over WebRTC (see "Multiplayer" below)
   shared/qr.js             QR code generator (SVG), no dependencies
   shared/qr-scan.js        QR code reader for camera frames (our codes: byte mode, level L/M)
+  shared/words.js          word lists (English, German) + no-repeat picking for the word games
   manifest.webmanifest     PWA manifest; the hub is the installable app (start_url ./)
   sw.js                    service worker: network-first with offline cache, precaches games.json games
   icons/                   PWA icons, drawn by `uv run minigames icons`
@@ -182,15 +183,29 @@ One phone per player over `shared/mesh.js`. Rules live in `logic.js` (tested).
 
 ### Odd Word Out (`site/games/odd-word-out/`)
 
-Social deduction, one device passed around. Rules in `logic.js`, word lists in `words.js` (tested).
+Social deduction, one device passed around. Rules in `logic.js`, words from `shared/words.js` (tested).
 
 - Setup: 3–20 players, word language (English/Deutsch), categories, impostor count
   (1 up to `maxImpostors`: always a clear majority knows the word), optional category hint for impostors.
 - Each round: a fresh word, impostors dealt at random; every player in turn sees a "pass to …"
   screen, then their card (word + category, or "The impostor"). Then a random starting player
   and the clue order; "Reveal" shows the impostor(s) and the word. Voting happens out loud.
-- Words: `words.js` has the same category ids in both languages, comma-separated lists. A word
+- Words: `shared/words.js` has the same category ids in both languages, comma-separated lists. A word
   listed in two categories only counts in the first. No repeats per tab: played words live in
   `sessionStorage["minigames:odd-word-out:used"]` (`{ [lang]: [word] }`); when the chosen
   categories run out they start over (noted on the result page).
 - Settings persist in `localStorage["minigames:odd-word-out:settings"]`.
+
+### Guess the Word (`site/games/guess-the-word/`)
+
+Forehead word guessing, one phone. Rules and the tilt detection in `logic.js` (tested); words from
+`shared/words.js`, no repeats per tab (`sessionStorage["minigames:guess-the-word:used"]`).
+
+- Players take turns guessing (30/60/90/120 s each); one point per word, standings at the end.
+- Tilt: `deviceorientation`, reduced to `screenUp = cos(beta)·cos(gamma)` (how far the screen faces
+  up), so it works in any rotation. Down past ~37° = got it, up = pass; the phone must come back
+  upright before the next tilt counts. iOS needs `DeviceOrientationEvent.requestPermission()`
+  from the Start tap; sensors only work over https (fine on Pages, not on `http://<lan-ip>`).
+- Always also: tap the right third (got it) / left third (pass), arrow keys, Esc ends the turn.
+- During a turn: fullscreen + landscape lock where the browser allows it, screen wake lock,
+  short beeps and vibration.

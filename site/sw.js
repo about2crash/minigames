@@ -1,7 +1,7 @@
 // Minigames service worker: makes the site installable and playable offline.
 // Same-origin requests: network first (so updates show up), cache as fallback.
 // Google Fonts: cache first. Bump VERSION to drop old caches.
-const VERSION = "v4";
+const VERSION = "v5";
 const CACHE = `minigames-${VERSION}`;
 const CORE = [
   "./",
@@ -13,6 +13,7 @@ const CORE = [
   "shared/qr.js",
   "shared/qr-scan.js",
   "shared/mesh.js",
+  "shared/words.js",
   "manifest.webmanifest",
   "icons/icon-192.png",
   "icons/icon-512.png",
