@@ -61,7 +61,8 @@ body.playing header { display: none; }
   border: 3px solid var(--face-fg); background: var(--panel); color: var(--fg); }
 .card .word { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
   font-size: clamp(2.2rem, 11vw, 3.6rem); line-height: 1; overflow-wrap: anywhere; hyphens: auto; }
-.card.impostor { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+/* Impostor card looks like every other card (no red glow on the face in a dark room); only the word is red. */
+.card.impostor .word { color: var(--accent); }
 .card .label { color: inherit; opacity: .75; }
 .card .sub { font-size: 1rem; }
 .card.flip { animation: flip .35s ease-out both; }
