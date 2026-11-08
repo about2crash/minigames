@@ -20,6 +20,9 @@
 //   room.update((s) => { s.phase = "play"; }) // leader only
 //   room.broadcast({ ... }) / room.send(id, { ... }) -> "message" events
 //   room.sendBulk(id, meta, arrayBuffer)              -> "bulk" events
+//   room.addEventListener("trouble", ...)     // a connection failed: { id, name, reason, manual }
+//   explain(reason, name)                     // what that means for a person, and what to try
+//   await room.stats()                        // links, paths, round trip times, throughput
 
 const ICE = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
 const PING_MS = 2000, DEAD_MS = 7000, CONNECT_MS = 15000, GATHER_MS = 2500, CHUNK = 16384;
@@ -128,6 +131,45 @@ function gathered(pc) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Candidate types (host, srflx, prflx, relay) offered in an SDP. */
+export const candTypes = (sdp) => new Set([...String(sdp || "").matchAll(/a=candidate:\S+ \d+ udp \d+ \S+ \d+ typ (\w+)/gi)].map((m) => m[1].toLowerCase()));
+const hasPublic = (types) => types.has("srflx") || types.has("prflx") || types.has("relay");
+
+/**
+ * Why did a connection never open? From what both sides offered:
+ *   offline         this device has no network
+ *   no-webrtc       the browser can't make peer connections
+ *   no-answer       the other side never answered (code not scanned in time)
+ *   no-stun-local   we found no public address: only the same network works
+ *   no-stun-remote  they found none
+ *   no-stun-both    neither did
+ *   nat             both found one, but the networks still don't let the phones through
+ */
+export function diagnose({ local, remote, answered = true, online = true }) {
+  if (online === false) return "offline";
+  if (!answered) return "no-answer";
+  const l = hasPublic(local), r = hasPublic(remote);
+  if (!l && !r) return "no-stun-both";
+  if (!l) return "no-stun-local";
+  if (!r) return "no-stun-remote";
+  return "nat";
+}
+
+const SAME_WIFI = "Put both phones on the same Wi-Fi, or let one phone open a hotspot and the other join it.";
+/** A sentence or two for a person: what went wrong and what to try. */
+export function explain(reason, name = "the other phone") {
+  switch (reason) {
+    case "offline": return "This phone is offline. Connect to Wi-Fi or mobile data and try again.";
+    case "no-webrtc": return "This browser can't make direct connections (WebRTC is missing or turned off). Try an up-to-date Chrome, Safari or Firefox, outside private mode.";
+    case "no-answer": return `No answer from ${name} in time: the code was probably not scanned. Make a new invite and try again.`;
+    case "no-stun-local": return `This phone couldn't find its public address (the STUN servers are blocked: some school, office or hotel Wi-Fi and VPNs do that), so it can only reach phones on the same network. Try mobile data, or: ${SAME_WIFI}`;
+    case "no-stun-remote": return `${name} couldn't find its public address (its network blocks the STUN servers), so it can only reach phones on the same network. ${SAME_WIFI}`;
+    case "no-stun-both": return `Neither phone could find its public address, and they aren't on the same network. ${SAME_WIFI}`;
+    case "nat": return `Both phones are online, but their networks don't allow a direct connection (strict firewall or NAT: common on mobile data and on hotel, school and office Wi-Fi). ${SAME_WIFI}`;
+    default: return `The connection to ${name} failed.`;
+  }
+}
+
 export class Room extends EventTarget {
   constructor({ id = randomId(), name = "", maxPeers = 12 } = {}) {
     super();
@@ -148,6 +190,9 @@ export class Room extends EventTarget {
     this.mergeFacts = (member, facts) => Object.assign(member, { name: str(facts.name) });
     // Hook: coerce the game's own fields of a state copy from a peer (return null to reject).
     this.cleanGame = (s) => s;
+    // did our last offer/answer include a public address? (null: not known yet)
+    this.netInfo = { publicRoute: null, types: [] };
+    this.counters = { delivered: 0, relayed: 0, dropped: 0 };
     this._tickTimer = setInterval(() => this._tick(), 1000);
     this._factsTimer = null;
     this._sendStateQueued = false;
@@ -188,15 +233,18 @@ export class Room extends EventTarget {
   async join(code) {
     const inv = parseInvite(code);
     if (!inv) throw new Error("That is not a valid invite");
+    if (typeof RTCPeerConnection === "undefined") throw new Error(explain("no-webrtc"));
     this._closeAll();
     this.roomId = inv.room;
     this.state = null;
     const peer = this._newPeer(inv.from, false);
     peer.name = inv.name;
     peer.timeout = 20 * 60e3; // the inviter still has to scan our reply
-    await peer.pc.setRemoteDescription(unpackSdp(inv.sdp, "offer"));
+    peer.manual = true;
+    await peer.setRemote(unpackSdp(inv.sdp, "offer"));
     await peer.pc.setLocalDescription(await peer.pc.createAnswer());
     await gathered(peer.pc);
+    this._noteNet(peer);
     return ["2", inv.invite, this.id, encText(this.me.name), ...packSdp(peer.pc.localDescription.sdp)].join("~");
   }
 
@@ -225,10 +273,12 @@ export class Room extends EventTarget {
   // ── Invites (the one manual signaling step) ──────────────────────
   async createInvite() {
     if (!this.roomId) throw new Error("Not in a room");
+    if (typeof RTCPeerConnection === "undefined") throw new Error(explain("no-webrtc"));
     const id = randomId(4);
     const peer = this._newPeer(null, true);
     await peer.pc.setLocalDescription(await peer.pc.createOffer());
     await gathered(peer.pc);
+    this._noteNet(peer);
     this.invites.set(id, { peer, at: Date.now() });
     // keep a handful of recent invites alive: someone may still be typing their name
     for (const [iid, inv] of this.invites) {
@@ -255,9 +305,10 @@ export class Room extends EventTarget {
     peer.id = r.id;
     peer.name = r.name;
     peer.born = Date.now();
+    peer.manual = true;
     // an old connection of theirs (they reloaded) is replaced once this one opens
     this.pending.set(r.id, peer);
-    await peer.pc.setRemoteDescription(unpackSdp(r.sdp, "answer"));
+    await peer.setRemote(unpackSdp(r.sdp, "answer"));
     return r.name;
   }
 
@@ -320,8 +371,17 @@ export class Room extends EventTarget {
       ctl: pc.createDataChannel("ctl", { negotiated: true, id: 0 }),
       bulk: pc.createDataChannel("bulk", { negotiated: true, id: 1 }),
       rx: null, bulkQueue: Promise.resolve(),
+      localTypes: new Set(), remoteTypes: new Set(), msgsIn: 0, msgsOut: 0, manual: false, prevStats: null,
     };
     peer.bulk.binaryType = "arraybuffer";
+    peer.setRemote = async (d) => {
+      for (const t of candTypes(d.sdp)) peer.remoteTypes.add(t);
+      await pc.setRemoteDescription(d);
+    };
+    pc.addEventListener("icecandidate", (e) => {
+      const t = e.candidate?.candidate?.match(/ typ (\w+)/)?.[1];
+      if (t) peer.localTypes.add(t);
+    });
     if (id) {
       const old = this.pending.get(id);
       if (old) this._drop(old);
@@ -336,6 +396,7 @@ export class Room extends EventTarget {
     peer.ctl.onclose = () => this._drop(peer);
     peer.ctl.onmessage = (e) => {
       peer.last = Date.now();
+      peer.msgsIn++;
       let m;
       try { m = JSON.parse(e.data); } catch { return; }
       this._onDirect(peer, m);
@@ -359,7 +420,8 @@ export class Room extends EventTarget {
       }
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") this._drop(peer);
+      if (pc.connectionState === "failed") this._drop(peer, "failed");
+      else if (pc.connectionState === "closed") this._drop(peer);
     };
     return peer;
   }
@@ -373,10 +435,20 @@ export class Room extends EventTarget {
     if (old && old !== peer) this._drop(old);
   }
 
-  _drop(peer) {
+  _drop(peer, why = "") {
     if (peer.dropped) return;
     peer.dropped = true;
     const wasOpen = peer.open;
+    // never opened: say why (unless it was just replaced or cancelled)
+    if (!wasOpen && (why === "failed" || why === "timeout") && peer.id) {
+      this.counters.dropped++;
+      for (const t of candTypes(peer.pc.localDescription?.sdp)) peer.localTypes.add(t);
+      const reason = diagnose({
+        local: peer.localTypes, remote: peer.remoteTypes,
+        answered: !!peer.pc.remoteDescription, online: globalThis.navigator?.onLine !== false,
+      });
+      this._emit("trouble", { id: peer.id, name: peer.name || this.state?.members[peer.id]?.name || "", reason, manual: peer.manual });
+    }
     peer.open = false;
     try { peer.pc.close(); } catch {}
     if (peer.id && this.peers.get(peer.id) === peer) this.peers.delete(peer.id);
@@ -398,7 +470,7 @@ export class Room extends EventTarget {
 
   _direct(peer, msg) {
     if (peer.ctl.readyState !== "open") return;
-    try { peer.ctl.send(JSON.stringify(msg)); } catch {}
+    try { peer.ctl.send(JSON.stringify(msg)); peer.msgsOut++; } catch {}
   }
 
   _onDirect(peer, m) {
@@ -446,7 +518,7 @@ export class Room extends EventTarget {
       if (env.o !== via && (env.h === 0 || this.alive(env.o))) return;
     }
     this.seen.set(env.mid, Date.now());
-    if (env.o !== this.id && (!env.to || env.to === this.id)) this._deliver(env);
+    if (env.o !== this.id && (!env.to || env.to === this.id)) { this.counters.delivered++; this._deliver(env); }
     if (env.to === this.id || env.h > 3) return;
     const out = { ...env, h: env.h + 1 };
     const open = [...this.peers.values()].filter((p) => p.open && p.id !== via && p.id !== env.o);
@@ -456,11 +528,14 @@ export class Room extends EventTarget {
       let hops = target && this.alive(target.id) ? [target] : live.filter((p) => p.neighbors.has(env.to));
       if (!hops.length) hops = live;
       if (target && !hops.includes(target)) hops.push(target); // a quiet link may still carry it
+      if (via && hops.length) this.counters.relayed++;
       for (const p of hops) this._direct(p, out);
       return;
     }
     const viaPeer = via && this.peers.get(via);
-    for (const p of open) if (!viaPeer || !viaPeer.neighbors.has(p.id)) this._direct(p, out);
+    const next = open.filter((p) => !viaPeer || !viaPeer.neighbors.has(p.id));
+    if (via && next.length) this.counters.relayed++;
+    for (const p of next) this._direct(p, out);
   }
 
   _deliver(env) {
@@ -557,15 +632,81 @@ export class Room extends EventTarget {
       if (dialing && dialing.initiator && this.id < from) return;
       const peer = this._newPeer(from, false);
       try {
-        await peer.pc.setRemoteDescription(d);
+        await peer.setRemote(d);
         await peer.pc.setLocalDescription(await peer.pc.createAnswer());
         await gathered(peer.pc);
         if (peer.dropped) return;
         this._route({ k: "sig", mid: randomId(10), o: this.id, h: 0, to: from, d: { type: "answer", sdp: peer.pc.localDescription.sdp } }, null);
       } catch { this._drop(peer); }
     } else if (d.type === "answer" && dialing && dialing.pc.signalingState === "have-local-offer") {
-      try { await dialing.pc.setRemoteDescription(d); } catch { this._drop(dialing); }
+      try { await dialing.setRemote(d); } catch { this._drop(dialing); }
     }
+  }
+
+  _noteNet(peer) {
+    const types = candTypes(peer.pc.localDescription?.sdp);
+    this.netInfo = { publicRoute: hasPublic(types), types: [...types] };
+  }
+
+  // ── Stats for nerds ──────────────────────────────────────────────
+  /**
+   * One row per link (working and still connecting): who, state, which path the data takes
+   * (local network / internet via NAT traversal / TURN), round trip time, bytes and bytes per
+   * second both ways (rates since the previous call), messages, how long it has been quiet.
+   */
+  async stats() {
+    const now = Date.now();
+    const rows = [];
+    const all = [...[...this.peers.values()].map((p) => [p, "open"]), ...[...this.pending.values()].map((p) => [p, "connecting"])];
+    for (const [p, kind] of all) {
+      const row = {
+        id: p.id, name: p.name || this.state?.members[p.id]?.name || "", kind,
+        ice: p.pc.iceConnectionState, conn: p.pc.connectionState,
+        alive: this.alive(p.id), quietMs: now - p.last, ageMs: now - p.born,
+        msgsIn: p.msgsIn, msgsOut: p.msgsOut, neighbors: p.neighbors.size,
+        buffered: (p.ctl.bufferedAmount || 0) + (p.bulk.bufferedAmount || 0),
+        offered: { local: [...p.localTypes], remote: [...p.remoteTypes] },
+        path: "", local: "", remote: "", protocol: "", rttMs: null,
+        bytesSent: 0, bytesReceived: 0, sendRate: null, recvRate: null,
+      };
+      try {
+        const report = await p.pc.getStats();
+        const byId = new Map();
+        report.forEach((r) => byId.set(r.id, r));
+        let pair = null;
+        report.forEach((r) => {
+          if (r.type === "transport" && r.selectedCandidatePairId) pair = byId.get(r.selectedCandidatePairId) || pair;
+        });
+        if (!pair) report.forEach((r) => { if (r.type === "candidate-pair" && (r.selected || (r.nominated && r.state === "succeeded"))) pair = r; });
+        if (pair) {
+          const lc = byId.get(pair.localCandidateId), rc = byId.get(pair.remoteCandidateId);
+          row.local = lc?.candidateType || "";
+          row.remote = rc?.candidateType || "";
+          row.protocol = lc?.protocol || "";
+          row.path = row.local === "relay" || row.remote === "relay" ? "TURN relay"
+            : row.local === "host" && row.remote === "host" ? "same network"
+            : "internet (direct)";
+          if (Number.isFinite(pair.currentRoundTripTime)) row.rttMs = Math.round(pair.currentRoundTripTime * 1000);
+          row.bytesSent = pair.bytesSent || 0;
+          row.bytesReceived = pair.bytesReceived || 0;
+        }
+      } catch {}
+      if (p.prevStats && now > p.prevStats.at) {
+        const dt = (now - p.prevStats.at) / 1000;
+        row.sendRate = Math.max(0, (row.bytesSent - p.prevStats.sent) / dt);
+        row.recvRate = Math.max(0, (row.bytesReceived - p.prevStats.recv) / dt);
+      }
+      p.prevStats = { at: now, sent: row.bytesSent, recv: row.bytesReceived };
+      rows.push(row);
+    }
+    const s = this.state;
+    return {
+      me: this.id, room: this.roomId, leader: s?.leader || null, isLeader: this.isLeader,
+      term: s?.term ?? null, ver: s?.ver ?? null,
+      members: s ? Object.values(s.members).filter((m) => !m.left).length : 0,
+      reachable: this.reachablePeers.length, invites: this.invites.size,
+      net: this.netInfo, counters: { ...this.counters }, peers: rows,
+    };
   }
 
   // ── Heartbeat: pings, dead peers, leader takeover, healing ───────
@@ -579,7 +720,7 @@ export class Room extends EventTarget {
     for (const [mid, t] of this.seen) if (now - t > 60e3) this.seen.delete(mid);
     for (const p of [...this.peers.values(), ...this.pending.values()]) {
       if (p.open && now - p.last > CLOSE_MS && !calm) this._drop(p);
-      else if (!p.open && now - p.born > p.timeout) this._drop(p);
+      else if (!p.open && now - p.born > p.timeout) this._drop(p, "timeout");
     }
     if (!this._pingAt || now - this._pingAt >= PING_MS) {
       this._pingAt = now;

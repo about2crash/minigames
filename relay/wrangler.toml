@@ -1,0 +1,18 @@
+# Minigames signaling relay. Deploy: see README.md in this folder.
+name = "minigames-relay"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "BOX"
+class_name = "Box"
+
+# SQLite-backed Durable Objects work on the Workers free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Box"]
+
+[vars]
+# Pages that may use this relay (comma separated, a trailing * matches a prefix).
+# Local development (uv run minigames) runs on 127.0.0.1 / localhost.
+ALLOWED_ORIGINS = "https://games.about2crash.com,https://about2crash.github.io,http://127.0.0.1:*,http://localhost:*"

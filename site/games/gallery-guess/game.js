@@ -1,5 +1,7 @@
 // Gallery Guess page logic. Rules are in logic.js, networking in ../../shared/mesh.js.
-import { Room, randomId, parseInvite, parseReply } from "../../shared/mesh.js";
+import { Room, randomId, parseInvite, parseReply, explain } from "../../shared/mesh.js";
+import { getSettings, connectMode, relayUrl, cleanRelayUrl, DEFAULT_RELAY } from "../../shared/settings.js";
+import { Mailbox, newTicket, ticketCode, parseTicket, relayExplain } from "../../shared/relay.js";
 import { qrSvg } from "../../shared/qr.js";
 import { scanImage } from "../../shared/qr-scan.js";
 import * as G from "./logic.js";
@@ -55,6 +57,10 @@ let invite = null;          // { id, code, at } the invite currently on screen
 let handoff = null;         // reply link opened in its own tab
 let prev = null;            // previous state, for "X joined" style messages
 let lostSince = 0;
+const boxes = new Map();    // inviteId -> Mailbox on the relay, waiting for that invite's reply
+let forceDirect = false;    // this phone shows a private (two-scan) invite even though a relay exists
+const troubles = [];        // recent failed connections, for the stats panel
+const SITE_RELAY = cleanRelayUrl(DEFAULT_RELAY);
 
 // ── Identity: one seat per tab; a refresh or a re-invite takes the same seat back ──
 function seatFor(roomId) {
@@ -172,7 +178,19 @@ room.addEventListener("rejected", (e) => {
   $("homeMsg").textContent = e.detail.why === "kicked" ? "You were removed from that room." : "Couldn't join: that invite is for another room.";
 });
 
+// A connection that never opened: tell the person why, where it matters (joining, inviting).
+room.addEventListener("trouble", (e) => {
+  const { name, reason, manual } = e.detail;
+  troubles.unshift({ at: Date.now(), name, reason, manual });
+  troubles.length = Math.min(troubles.length, 8);
+  if (!manual) return; // mesh healing retries by itself
+  const text = explain(reason, name || "the other phone");
+  if (joining && !room.state) { joining.trouble = text; render(); }
+  else { $("inviteMsg").textContent = `Couldn't connect ${name || "them"}: ${text}`; toast(`Couldn't connect ${name || "a player"}`); }
+});
+
 function onState(detail) {
+  if (joining?.box && room.state) { joining.box.close(); joining.box = null; }
   const s = room.state;
   if (!s) return;
   if (joining) {
@@ -313,8 +331,11 @@ function resetLocal() {
   asked.clear();
   myPids = [];
   invite = null;
+  joining?.box?.close();
   joining = null;
   prev = null;
+  for (const b of boxes.values()) b.close();
+  boxes.clear();
   session.set({});
 }
 
@@ -329,7 +350,7 @@ function createRoom() {
   render();
 }
 
-async function joinRoom(code) {
+async function joinRoom(code, box = null) {
   const inv = parseInvite(code);
   if (!inv) { $("homeMsg").textContent = "That doesn't look like an invite link."; return; }
   const name = myName();
@@ -350,7 +371,7 @@ async function joinRoom(code) {
     myPids.forEach((pid, i) => photos.set(pid, { blob: picks[i].blob, url: picks[i].url, owner: room.id, game: mine.game }));
     room.me = { name, game: mine.game, ready: mine.ready === true, pids: myPids };
   } else room.me = { name };
-  joining = { inviter: inv.name || "the host", reply: null };
+  joining = { inviter: inv.name || "the host", reply: null, box, showCode: !box };
   history.replaceState(null, "", BASE);
   render();
   try {
@@ -358,11 +379,42 @@ async function joinRoom(code) {
     if (!joining) return;
     joining.reply = linkFor("r", reply);
     joining.at = Date.now();
+    if (box) {
+      // one-scan join: the reply goes back through the relay, nothing to show
+      try { await box.put("answer", reply); }
+      catch (e) { joining.trouble = `${e.message} Show them your reply code instead.`; joining.showCode = true; }
+    }
     render();
   } catch (e) {
+    box?.close();
     joining = null;
     render();
     $("homeMsg").textContent = `Couldn't prepare the connection: ${e.message}`;
+  }
+}
+
+// One-scan invite (#c=…): fetch the invite code from the relay, then join as usual.
+async function joinRelay(text, anyway = false) {
+  const t = parseTicket(codeFrom(text, "c"), SITE_RELAY);
+  $("joinAnyway").hidden = true;
+  if (!t) { $("homeMsg").textContent = "That invite link is damaged. Scan the code again, or ask for a new invite."; return; }
+  if (!t.url) { $("homeMsg").textContent = relayExplain("not-configured"); return; }
+  if (getSettings().privacy && !anyway) {
+    $("homeMsg").textContent = "This invite goes through the relay server, but Full privacy is on in Settings. Join through the relay this once, or ask for a private invite (two scans).";
+    $("joinAnyway").hidden = false;
+    return;
+  }
+  if (!myName()) return;
+  $("homeMsg").textContent = "Fetching the invite…";
+  const box = new Mailbox(t);
+  try {
+    await box.connect();
+    const code = await box.wait("offer", 10e3, "no-offer");
+    $("homeMsg").textContent = "";
+    await joinRoom(code, box);
+  } catch (e) {
+    box.close();
+    $("homeMsg").textContent = e.message;
   }
 }
 
@@ -382,7 +434,8 @@ function leaveRoom() {
 
 async function scanInvite() {
   const v = await scanCode();
-  if (v) joinRoom(codeFrom(v, "j"));
+  if (!v) return;
+  if (/#c=/.test(v)) joinRelay(v); else joinRoom(codeFrom(v, "j"));
 }
 
 async function ensureInvite(force = false) {
@@ -393,13 +446,61 @@ async function ensureInvite(force = false) {
   try {
     const { id, code } = await room.createInvite();
     if (invite !== mine) return;
-    invite = { id, code, at: Date.now() };
-    $("inviteQr").innerHTML = qrSvg(linkFor("j", code));
-    $("inviteQr").dataset.link = linkFor("j", code);
+    let link = linkFor("j", code), relayed = false, note = "";
+    if (connectMode() === "relay" && !forceDirect) {
+      // one-scan invite: the code waits on the relay, sealed with a key that is only in the link
+      const t = newTicket(relayUrl());
+      const box = new Mailbox(t);
+      try {
+        await box.connect();
+        await box.put("offer", code);
+        if (invite !== mine) { box.close(); return; }
+        boxes.set(id, box);
+        link = linkFor("c", ticketCode(t, SITE_RELAY));
+        relayed = true;
+        box.wait("answer").then(
+          (reply) => { boxes.delete(id); box.close(); return submitReply(reply); },
+          (e) => {
+            boxes.delete(id); box.close();
+            if (invite?.id === id && e.code !== "closed" && e.code !== "expired") $("inviteMsg").textContent = e.message;
+          },
+        );
+      } catch (e) {
+        box.close();
+        note = `${e.message} Showing a private invite instead: they'll show you a reply code to scan.`;
+      }
+    }
+    invite = { id, code, at: Date.now(), link, relayed, note };
+    $("inviteQr").innerHTML = qrSvg(link);
+    $("inviteQr").dataset.link = link;
   } catch (e) {
     invite = null;
     $("inviteQr").innerHTML = `<span class="hint">Couldn't make an invite: ${esc(e.message)}</span>`;
   }
+  // boxes of invites the room has dropped (used, or too old) aren't needed any more
+  for (const [iid, b] of boxes) if (!room.hasInvite(iid)) { b.close(); boxes.delete(iid); }
+  renderInviteMode();
+}
+
+// The steps, and which kind of invite this is (one scan via the relay, or two scans).
+function renderInviteMode() {
+  const relayed = !!invite?.relayed;
+  const steps = relayed
+    ? ["They scan this code with their phone camera (or open the link).", "They type their name and tap Join. That's it."]
+    : ["They scan this code with their phone camera (or open the link).", "They type their name and show you a reply code.", "You scan their reply with your camera. Done."];
+  const ol = $("inviteSteps");
+  ol.innerHTML = "";
+  for (const t of steps) { const li = document.createElement("li"); li.textContent = t; ol.append(li); }
+  $("replyField").hidden = relayed;
+  const line = $("inviteMode");
+  line.innerHTML = "";
+  const add = (text) => line.append(document.createTextNode(text));
+  const button = (text, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "linkish"; b.textContent = text; b.addEventListener("click", fn); line.append(b); };
+  if (invite?.note) add(invite.note + " ");
+  if (relayed) { add("One scan, through the relay. "); button("Private invite instead", () => { forceDirect = true; ensureInvite(true); }); }
+  else if (forceDirect && connectMode() === "relay") { add("Private invite: two scans, no server. "); button("Back to one scan", () => { forceDirect = false; ensureInvite(true); }); }
+  else if (getSettings().privacy) add("Full privacy is on (Settings): two scans, no server.");
+  if (room.netInfo.publicRoute === false) add(" Heads-up: this phone couldn't find its public address (STUN blocked), so only phones on this Wi-Fi can join.");
 }
 
 async function takeReply(text) {
@@ -601,9 +702,16 @@ function render() {
 
 function renderHome() {
   const inv = parseInvite(codeFrom(location.hash, "j"));
-  $("joinBox").hidden = !inv;
-  $("createBox").hidden = !!inv;
+  const relayed = location.hash.startsWith("#c=");
+  $("joinBox").hidden = !inv && !relayed;
+  $("createBox").hidden = !!inv || relayed;
   if (inv) $("inviterName").textContent = inv.name || "Someone";
+  else if (relayed) $("inviterName").textContent = "Someone";
+  const mode = connectMode();
+  $("modeLine").textContent = mode === "relay"
+    ? `This browser: one-scan joining through the relay (${relayUrl()}). Change it in Settings.`
+    : getSettings().privacy ? "This browser: Full privacy, two scans, no server. Change it in Settings."
+    : "This site has no relay server set up, so joining takes two scans.";
   $("inviteScan").hidden = !canScan;
   const last = !inv && lastSeat();
   $("rejoinBox").hidden = !last;
@@ -616,6 +724,19 @@ function renderHome() {
 function renderReply() {
   show("reply");
   $("replyTo").textContent = joining.inviter;
+  const relay = !!joining.box && !joining.showCode;
+  $("replyManual").hidden = relay;
+  $("replyShowCode").hidden = !relay;
+  $("replyTitle").firstChild.textContent = relay ? "Connecting to " : "Show this to ";
+  $("replyTrouble").hidden = !joining.trouble;
+  $("replyTrouble").textContent = joining.trouble || "";
+  if (relay) {
+    const slow = joining.at && Date.now() - joining.at > 20e3;
+    $("replyMsg").textContent = !joining.reply ? "Preparing the connection…"
+      : slow ? `Still connecting. ${joining.inviter} needs the game open. If it doesn't work, show them a reply code instead.`
+      : `Joining through the relay. ${joining.inviter} doesn't need to scan anything.`;
+    return;
+  }
   if (joining.reply && $("replyQr").dataset.for !== joining.reply) {
     $("replyQr").dataset.for = joining.reply;
     $("replyQr").innerHTML = qrSvg(joining.reply);
@@ -823,12 +944,17 @@ $("inviteSlot").addEventListener("toggle", () => { if (inviteVisible()) ensureIn
 // ── Wiring ──
 $("nameInput").value = store.get("name", "");
 $("createBtn").addEventListener("click", createRoom);
-$("joinBtn").addEventListener("click", () => joinRoom(codeFrom(location.hash, "j")));
+$("joinBtn").addEventListener("click", () => (location.hash.startsWith("#c=") ? joinRelay(location.hash) : joinRoom(codeFrom(location.hash, "j"))));
+$("joinAnyway").addEventListener("click", () => joinRelay(location.hash, true));
+$("replyShowCode").addEventListener("click", () => { if (joining) { joining.showCode = true; render(); } });
 $("nameInput").addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
   if (!$("joinBox").hidden) $("joinBtn").click(); else createRoom();
 });
-$("inviteGo").addEventListener("click", () => joinRoom(codeFrom($("inviteInput").value, "j")));
+$("inviteGo").addEventListener("click", () => {
+  const v = $("inviteInput").value;
+  if (/#c=/.test(v)) joinRelay(v); else joinRoom(codeFrom(v, "j"));
+});
 $("inviteInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("inviteGo").click(); });
 $("inviteScan").addEventListener("click", scanInvite);
 $("rejoinScan").addEventListener("click", scanInvite);
@@ -842,8 +968,8 @@ $("replyShare").addEventListener("click", () => joining?.reply && shareOrCopy(jo
 $("replyCopy").addEventListener("click", () => joining?.reply && copy(joining.reply));
 $("replyCancel").addEventListener("click", () => { room.leave(); resetLocal(); render(); });
 $("handoffCopy").addEventListener("click", () => copy($("handoffCode").value));
-$("inviteShare").addEventListener("click", () => invite?.code && shareOrCopy(linkFor("j", invite.code), "Join my Gallery Guess game"));
-$("inviteCopy").addEventListener("click", () => invite?.code && copy(linkFor("j", invite.code)));
+$("inviteShare").addEventListener("click", () => invite?.link && shareOrCopy(invite.link, "Join my Gallery Guess game"));
+$("inviteCopy").addEventListener("click", () => invite?.link && copy(invite.link));
 $("inviteNew").addEventListener("click", () => ensureInvite(true));
 $("replyGo").addEventListener("click", () => submitReply($("replyInput").value));
 $("replyInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("replyGo").click(); });
@@ -897,7 +1023,54 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("hashchange", () => {
   const h = location.hash;
   if (h.startsWith("#r=") && room.state) { submitReply(h); history.replaceState(null, "", BASE); }
-  else if (h.startsWith("#j=") && !room.state) render();
+  else if ((h.startsWith("#j=") || h.startsWith("#c=")) && !room.state) render();
+});
+
+// ── Stats for nerds (Settings) ──
+const kb = (n) => (n == null ? "–" : n < 1024 ? `${Math.round(n)} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`);
+const ago = (ms) => (ms < 1000 ? "now" : ms < 60e3 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60e3)} min`);
+let nerdBusy = false;
+async function renderNerds() {
+  const on = getSettings().nerdStats;
+  $("nerds").hidden = !on;
+  if (!on || !$("nerds").open || nerdBusy) return;
+  nerdBusy = true;
+  try {
+    const st = await room.stats();
+    const mode = connectMode();
+    const boxList = [...boxes.values(), ...(joining?.box ? [joining.box] : [])];
+    const info = [
+      ["Joining", mode === "relay" ? `one scan via relay ${relayUrl()}${forceDirect ? " (this invite: private)" : ""}` : getSettings().privacy ? "full privacy: two scans" : "two scans (no relay set up)"],
+      ["Relay boxes", boxList.length ? boxList.map((b) => `${b.status} ↑${kb(b.sentBytes)} ↓${kb(b.recvBytes)}`).join(", ") : "none open"],
+      ["This phone", `${st.me}${st.isLeader ? " (leader)" : ""}`],
+      ["Room", st.room ? `${st.room} · leader ${nameOf(st.leader)} · term ${st.term} · v${st.ver} · ${st.members} members, ${st.reachable} reachable` : "not in a room"],
+      ["Public address", st.net.publicRoute == null ? "not checked yet" : `${st.net.publicRoute ? "found" : "NOT found (STUN blocked?)"} · candidates: ${st.net.types.join(", ") || "none"}`],
+      ["Messages", `${st.counters.delivered} delivered, ${st.counters.relayed} passed on for others, ${st.counters.dropped} failed connections`],
+      ["Open invites", String(st.invites)],
+    ];
+    const rows = st.peers.map((p) => {
+      const path = p.path ? `${p.path} (${p.local}→${p.remote}${p.protocol ? " " + p.protocol : ""})` : `${p.ice} · offered ${p.offered.local.join("/") || "–"} → ${p.offered.remote.join("/") || "–"}`;
+      const cls = p.kind === "open" && p.alive ? "good" : p.kind === "open" ? "bad" : "";
+      return `<tr><td>${esc(p.name || p.id)}</td><td class="${cls}">${esc(p.kind === "open" ? (p.alive ? "open" : "quiet") : p.conn)}</td><td>${esc(path)}</td>`
+        + `<td class="num">${p.rttMs == null ? "–" : esc(p.rttMs) + " ms"}</td><td class="num">${kb(p.sendRate)}/s</td><td class="num">${kb(p.recvRate)}/s</td>`
+        + `<td class="num">${kb(p.bytesSent)} / ${kb(p.bytesReceived)}</td><td class="num">${esc(p.msgsOut)} / ${esc(p.msgsIn)}</td>`
+        + `<td class="num">${esc(p.neighbors)}</td><td class="num">${ago(p.quietMs)}</td></tr>`;
+    }).join("");
+    const fails = troubles.map((t) => `<li>${ago(Date.now() - t.at)} ago · ${esc(t.name || "?")}: ${esc(t.reason)}${t.manual ? " (join)" : " (mesh)"}</li>`).join("");
+    $("nerdBody").innerHTML = `<dl>${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+      + `<div class="nerd-wrap"><table><thead><tr><th>Peer</th><th>State</th><th>Path</th><th>RTT</th><th>↑</th><th>↓</th><th>Total ↑/↓</th><th>Msgs ↑/↓</th><th>Sees</th><th>Last heard</th></tr></thead>`
+      + `<tbody>${rows || `<tr><td colspan="10">No connections.</td></tr>`}</tbody></table></div>`
+      + (fails ? `<span class="label">Failed connections</span><ul class="hint">${fails}</ul>` : "");
+  } finally { nerdBusy = false; }
+}
+setInterval(renderNerds, 1000);
+$("nerds").addEventListener("toggle", renderNerds);
+// Settings changed in another tab (Settings page): show the right kind of invite
+window.addEventListener("storage", (e) => {
+  if (e.key !== "minigames:settings") return;
+  renderNerds();
+  if (inviteVisible()) ensureInvite(true);
+  if (!room.state && !joining) renderHome();
 });
 
 // ── Start ──

@@ -22,6 +22,16 @@ uv run minigames test             # Python checks + JavaScript tests (needs Node
 | [Gallery Guess](site/games/gallery-guess/) | Everyone picks photos from their camera roll; guess whose photo it is, fast. One phone each: join by scanning a QR code, phones connect peer to peer, no server. |
 | [Odd Word Out](site/games/odd-word-out/) | Pass one phone around: everyone sees the secret word except the impostor(s). One clue each, then vote. Over 1000 words each in German and English, 17 categories; no word repeats in a session. |
 | [Guess the Word](site/games/guess-the-word/) | Phone on your forehead, the others describe the word. Tilt down when you get it, tilt up to pass (or tap the screen edges). Same word lists, timed turns, scores. |
+| [Most Likely Boom](site/games/most-likely-boom/) | “Who is most likely to …?” Read it out, hand the phone to that person, they tap for the next question. A hidden bomb ticks (random time, 30 s to 5 min); whoever holds it when it explodes loses, or a random twist picks someone else. |
+
+## Settings
+
+The hub links to a Settings page (stored per browser): Light / Dark / System theme, how multiplayer
+phones connect (**one scan** through a small relay server, or **full privacy** with two scans and
+no server at all), and "stats for nerds" (connections, paths, round trip times, throughput).
+
+One-scan joining needs the relay in [`relay/`](relay/) deployed once to Cloudflare (free plan);
+see [relay/README.md](relay/README.md). Without it, games use two scans.
 
 ## Deploy to GitHub Pages
 

@@ -371,3 +371,20 @@ test("a player coming back doesn't grab the lead before hearing who is around", 
   assert.equal(b.state.leader, A);
   b.destroy();
 });
+
+test("failed connections are diagnosed from what both sides offered, and explained", async () => {
+  const { diagnose, explain, candTypes } = await import("../../site/shared/mesh.js");
+  const S = (...t) => new Set(t);
+  assert.deepEqual([...candTypes(CHROME_OFFER)].sort(), ["host", "srflx"]);
+  assert.equal(diagnose({ local: S("host", "srflx"), remote: S("host"), online: false }), "offline");
+  assert.equal(diagnose({ local: S("host", "srflx"), remote: S(), answered: false }), "no-answer");
+  assert.equal(diagnose({ local: S("host"), remote: S("host") }), "no-stun-both");
+  assert.equal(diagnose({ local: S("host"), remote: S("host", "srflx") }), "no-stun-local");
+  assert.equal(diagnose({ local: S("host", "srflx"), remote: S("host") }), "no-stun-remote");
+  assert.equal(diagnose({ local: S("host", "srflx"), remote: S("srflx") }), "nat");
+  for (const r of ["offline", "no-webrtc", "no-answer", "no-stun-local", "no-stun-remote", "no-stun-both", "nat"]) {
+    assert.ok(explain(r, "Anna").length > 40, r);
+  }
+  assert.match(explain("no-stun-remote", "Anna"), /^Anna/);
+  assert.match(explain("nat"), /same Wi-Fi|hotspot/);
+});

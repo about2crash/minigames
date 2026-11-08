@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+<script src="../shared/pwa.js" data-root="../"></script>
+<title>Settings · Minigames</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+/* Site-wide settings: stored in this browser (shared/settings.js). */
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.choices { display: grid; gap: 10px; }
+.choice { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: start; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.choice:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.choice:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.choice input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--accent); grid-row: span 2; }
+.choice b { font-weight: 600; }
+.choice .hint { grid-column: 2; }
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.relay-row input { flex: 1; min-width: 0; }
+details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.ok { color: var(--good); }
+.bad { color: var(--accent); }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <a class="back" href="../">← All games</a>
+    <h1>Set<span>tings</span></h1>
+    <p class="lede">Saved in this browser only. They apply to every game.</p>
+  </header>
+
+  <section class="panel">
+    <h2>Appearance</h2>
+    <div class="field">
+      <span class="label" id="themeLabel">Theme</span>
+      <div class="seg" id="theme" role="group" aria-labelledby="themeLabel"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Multiplayer connection</h2>
+    <p class="hint">How phones find each other in games like Gallery Guess. Either way, once connected, game data and photos go straight from phone to phone.</p>
+    <div class="choices" role="radiogroup" aria-label="Connection">
+      <label class="choice">
+        <input type="radio" name="mode" value="relay" id="modeRelay">
+        <b>Easy: one scan</b>
+        <span class="hint">The newcomer scans the invite and is in. The two connection codes pass through our relay server on Cloudflare, end-to-end encrypted. The relay can see that two phones connect (their IP addresses) but not what the codes say. Boxes delete themselves after 15 minutes.</span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="mode" value="direct" id="modeDirect">
+        <b>Full privacy: two scans</b>
+        <span class="hint">No server at all. The newcomer scans the invite, then the inviter scans the newcomer's reply code. Only public STUN servers tell each phone its own address.</span>
+      </label>
+    </div>
+    <p class="hint bad" id="noRelay" hidden>No relay server is set up for this site yet, so games use two scans. Whoever runs the site can deploy one (see relay/README.md), or you can enter one below.</p>
+    <label class="toggle" for="nerds">
+      <input id="nerds" type="checkbox">
+      <span>Stats for nerds: show connections, paths, round trip times and throughput in multiplayer games</span>
+    </label>
+    <details>
+      <summary>Relay server</summary>
+      <div class="field">
+        <span class="hint" id="relayDefault"></span>
+        <div class="row relay-row">
+          <input type="text" id="relayUrl" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://minigames-relay.example.workers.dev" aria-label="Relay server URL">
+          <button type="button" id="relaySave">Save</button>
+        </div>
+        <div class="row">
+          <button type="button" id="relayTest">Test relay</button>
+          <button type="button" id="relayReset">Use the default</button>
+        </div>
+        <p class="hint" id="relayMsg" role="status"></p>
+      </div>
+    </details>
+  </section>
+</main>
+
+<script type="module">
+import { getSettings, setSettings, relayUrl, cleanRelayUrl, DEFAULT_RELAY } from "../shared/settings.js";
+import { testRelay } from "../shared/relay.js";
+
+const $ = (id) => document.getElementById(id);
+
+function render() {
+  const s = getSettings();
+  const box = $("theme");
+  box.innerHTML = "";
+  for (const [v, text] of [["system", "System"], ["light", "Light"], ["dark", "Dark"]]) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text; b.setAttribute("aria-pressed", String(s.theme === v));
+    b.addEventListener("click", () => { setSettings({ theme: v }); render(); });
+    box.append(b);
+  }
+  const hasRelay = !!relayUrl(s);
+  $("modeRelay").disabled = !hasRelay;
+  $("modeRelay").checked = hasRelay && !s.privacy;
+  $("modeDirect").checked = !hasRelay || s.privacy;
+  $("noRelay").hidden = hasRelay;
+  $("nerds").checked = s.nerdStats;
+  if (document.activeElement !== $("relayUrl")) $("relayUrl").value = s.relay;
+  const def = cleanRelayUrl(DEFAULT_RELAY);
+  $("relayDefault").textContent = def ? `Default: ${def}. Enter another one to use your own.` : "This site has no default relay. Enter the address of one you deployed (relay/ in the repo).";
+  $("relayReset").hidden = !s.relay;
+}
+
+for (const r of document.querySelectorAll('input[name="mode"]')) {
+  r.addEventListener("change", () => { setSettings({ privacy: $("modeDirect").checked }); render(); });
+}
+$("nerds").addEventListener("change", () => setSettings({ nerdStats: $("nerds").checked }));
+$("relaySave").addEventListener("click", () => {
+  const text = $("relayUrl").value.trim();
+  const url = cleanRelayUrl(text);
+  if (text && !url) { $("relayMsg").textContent = "That isn't an https address."; $("relayMsg").className = "hint bad"; return; }
+  setSettings({ relay: url });
+  $("relayMsg").textContent = url ? "Saved. Press Test relay to check it." : "Saved: using the default.";
+  $("relayMsg").className = "hint";
+  render();
+});
+$("relayReset").addEventListener("click", () => { setSettings({ relay: "" }); $("relayUrl").value = ""; $("relayMsg").textContent = ""; render(); });
+$("relayTest").addEventListener("click", async () => {
+  const url = cleanRelayUrl($("relayUrl").value) || relayUrl();
+  const msg = $("relayMsg");
+  if (!url) { msg.textContent = "Enter a relay address first."; msg.className = "hint bad"; return; }
+  msg.textContent = `Testing ${url}…`; msg.className = "hint";
+  try {
+    const { ms } = await testRelay(url);
+    msg.textContent = `Works: a code went through and back in ${ms} ms.`; msg.className = "hint ok";
+  } catch (e) {
+    msg.textContent = e.message; msg.className = "hint bad";
+  }
+});
+
+render();
+</script>
+</body>
+</html>

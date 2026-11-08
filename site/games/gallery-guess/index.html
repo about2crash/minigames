@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Other players send us data: only scripts from this site may ever run (no inline scripts). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<!-- Other players send us data: only scripts from this site may ever run (no inline scripts).
+     connect-src wss: is for the optional signaling relay (any address can be set in Settings). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' wss: ws://127.0.0.1:* ws://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#1d2420">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -38,6 +39,22 @@
 .big-name { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); font-size: clamp(2rem, 8vw, 3rem); line-height: 1; overflow-wrap: anywhere; }
 .face .hint, .face .lede { color: var(--face-fg); opacity: .75; }
 .face button:not(.primary) { border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); }
+
+.trouble { margin: 0; border: 2px solid var(--accent); border-radius: var(--radius); padding: 10px 12px; text-align: left; max-width: 46ch; }
+.linkish { border: 0; padding: 0 2px; min-height: 0; background: none; color: inherit; text-decoration: underline; font: inherit; }
+
+/* Stats for nerds */
+.nerds summary { cursor: pointer; font-weight: 600; }
+.nerds dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; font-size: .85rem; }
+.nerds dt { color: var(--muted); }
+.nerds dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.nerd-wrap { overflow-x: auto; }
+.nerds table { border-collapse: collapse; font: .78rem/1.4 var(--mono); white-space: nowrap; }
+.nerds th, .nerds td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.nerds th { color: var(--muted); font-weight: 600; }
+.nerds .num { text-align: right; }
+.nerds .bad { color: var(--accent); }
+.nerds .good { color: var(--good); }
 
 /* Lobby */
 .members { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -164,6 +181,7 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
       <div id="joinBox" class="field" hidden>
         <p class="hint"><b id="inviterName"></b> invited you to a room.</p>
         <button class="primary" type="button" id="joinBtn">Join the game</button>
+        <button type="button" id="joinAnyway" hidden>Join through the relay this once</button>
       </div>
       <div id="rejoinBox" class="field rejoin" hidden>
         <p><b>Back to room <span id="rejoinRoom"></span>?</b><br>
@@ -185,7 +203,8 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
     </div>
     <details class="panel how">
       <summary>How joining works</summary>
-      <p>One player creates a room and shows an invite code. You scan it with your phone camera, type your name and get a reply code. The host scans your reply, and you're in. Anyone already in the room can invite the next player.</p>
+      <p>One player creates a room and shows an invite code. You scan it with your phone camera, type your name and tap Join. With the relay (the default where one is set up) that's it. With <i>Full privacy</i> you then show a reply code and the host scans it too. Anyone already in the room can invite the next player.</p>
+      <p class="hint" id="modeLine"></p>
       <p class="hint">Works best on the same Wi-Fi. Across the internet it usually works too; some strict networks (offices, hotels, some mobile carriers) block direct connections.</p>
     </details>
   </section>
@@ -193,14 +212,18 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
   <!-- Guest: show the reply code to the inviter -->
   <section id="reply" class="page face reply-box" hidden>
     <span class="label" style="color: inherit; opacity: .7">Almost in</span>
-    <div class="big-name">Show this to <span id="replyTo"></span></div>
-    <p class="hint">They scan it with their phone camera. Can't scan? Share the link with them instead.</p>
-    <div class="qr" id="replyQr"><span class="hint">Preparing your reply…</span></div>
-    <div class="row">
-      <button type="button" id="replyShare">Share link</button>
-      <button type="button" id="replyCopy">Copy link</button>
+    <div class="big-name" id="replyTitle">Show this to <span id="replyTo"></span></div>
+    <div id="replyManual" class="reply-box">
+      <p class="hint">They scan it with their phone camera. Can't scan? Share the link with them instead.</p>
+      <div class="qr" id="replyQr"><span class="hint">Preparing your reply…</span></div>
+      <div class="row">
+        <button type="button" id="replyShare">Share link</button>
+        <button type="button" id="replyCopy">Copy link</button>
+      </div>
     </div>
     <p class="hint" id="replyMsg" role="status">Waiting for them to scan…</p>
+    <p class="trouble" id="replyTrouble" role="alert" hidden></p>
+    <button type="button" id="replyShowCode" hidden>Not connecting? Show a reply code instead</button>
     <button type="button" id="replyCancel">Cancel</button>
   </section>
 
@@ -279,6 +302,11 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
       <div class="gallery" id="gallery"></div>
     </div>
   </section>
+
+  <details class="panel nerds" id="nerds" hidden>
+    <summary>Stats for nerds</summary>
+    <div id="nerdBody"></div>
+  </details>
 </main>
 
 <!-- The invite panel lives in the lobby, or in this dialog during a game -->
@@ -286,18 +314,15 @@ details summary { cursor: pointer; font-weight: 600; min-height: 32px; }
   <div class="close-row"><button type="button" data-close>Close</button></div>
   <div id="invitePanel" class="field">
     <h2>Invite players</h2>
-    <ol class="steps hint">
-      <li>They scan this code with their phone camera (or open the link).</li>
-      <li>They type their name and show you a reply code.</li>
-      <li>You scan their reply with your camera. Done.</li>
-    </ol>
+    <ol class="steps hint" id="inviteSteps"></ol>
     <div class="qr" id="inviteQr"><span class="hint">Making an invite…</span></div>
     <div class="row" style="justify-content: center">
       <button type="button" id="inviteShare">Share link</button>
       <button type="button" id="inviteCopy">Copy link</button>
       <button type="button" id="inviteNew">New code</button>
     </div>
-    <div class="field">
+    <p class="hint" id="inviteMode"></p>
+    <div class="field" id="replyField">
       <span class="label">Their reply</span>
       <div class="row">
         <input type="text" id="replyInput" placeholder="Paste their reply link" autocomplete="off" style="flex: 1">
