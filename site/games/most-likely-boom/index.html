@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="../../manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="../../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../../icons/apple-touch-icon.png">
+<script src="../../shared/pwa.js" data-root="../../"></script>
+<title>Most Likely Boom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="../../shared/theme.css">
+<style>
+/* Most Likely Boom: read the question, hand the phone to whoever fits it best, until the bomb goes off. */
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.seg button:disabled { opacity: .35; cursor: not-allowed; }
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+
+/* Play + boom: the whole screen */
+.full { position: fixed; inset: 0; z-index: 10; background: var(--face); color: var(--face-fg);
+  display: grid; grid-template-rows: auto 1fr auto; text-align: center; overflow: hidden; user-select: none; -webkit-user-select: none;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.full-top { display: flex; justify-content: space-between; align-items: center; }
+.full-top button { color: var(--face-fg); border-color: color-mix(in srgb, var(--face-fg) 40%, transparent); }
+.full-top .count { font-family: var(--mono); font-size: .85rem; opacity: .6; }
+.mid { display: grid; align-content: center; justify-items: center; gap: 2.2vmin; min-height: 0; }
+.bomb { font-size: clamp(3rem, 14vmin, 7rem); line-height: 1; }
+.bomb.tick { animation: tick .25s ease-out; }
+@keyframes tick { 40% { transform: scale(1.12) rotate(-4deg); } }
+.q-start { font-size: clamp(1rem, 4.5vmin, 1.6rem); opacity: .75; }
+.q-end { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2rem, min(9vw, 11vh), 5.5rem); line-height: 1; max-width: 22ch; text-wrap: balance; overflow-wrap: break-word; hyphens: auto; }
+.q-end.fresh { animation: q-in .3s ease-out both; }
+@keyframes q-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.pass-hint { font-size: .9rem; opacity: .65; max-width: 36ch; margin: 0 auto; }
+.next { width: 100%; min-height: max(88px, 16vh); font-size: 1.3rem; border-radius: var(--radius-lg);
+  background: var(--accent); color: var(--accent-fg); border: 0; font-weight: 600; touch-action: manipulation; }
+.next:disabled { opacity: .5; }
+.bottom { display: grid; gap: 10px; }
+
+.boom { background: var(--accent); color: var(--accent-fg); }
+.boom.flash { animation: boom-flash .9s ease-out; }
+@keyframes boom-flash { 0% { background: var(--face-fg); } 15% { background: var(--pop-1); } 100% { background: var(--accent); } }
+.boom .mid { gap: 3vmin; }
+.boom .bang { font-size: clamp(4rem, 22vmin, 11rem); line-height: 1; }
+.boom.flash .bang { animation: bang .7s cubic-bezier(.2, 1.6, .4, 1) both; }
+@keyframes bang { from { transform: scale(.2); } to { transform: none; } }
+.boom .title { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case);
+  font-size: clamp(2.6rem, min(14vw, 16vh), 7rem); line-height: .95; }
+.boom .line { font-size: clamp(1.1rem, 5vmin, 1.8rem); max-width: 26ch; }
+.boom .last { font-size: .9rem; opacity: .8; max-width: 40ch; }
+.boom .row { justify-content: center; }
+.boom button { border-color: var(--accent-fg); color: var(--accent-fg); }
+.boom .primary { background: var(--accent-fg); color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .bomb.tick, .q-end.fresh, .boom.flash, .boom.flash .bang { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="back" href="../../">← All games</a>
+    <h1>Most Likely <span>Boom</span></h1>
+    <p class="lede">“Who is most likely to …?” Read the question out loud and hand the phone to whoever fits it best. They tap for the next one. Somewhere a bomb is ticking: whoever holds the phone when it goes off loses.</p>
+  </header>
+
+  <section id="setup" class="panel page">
+    <h2>Setup</h2>
+    <div class="settings">
+      <div class="field">
+        <span class="label" id="langLabel">Question language</span>
+        <div class="seg" id="langs" role="group" aria-labelledby="langLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label" id="ruleLabel">When it explodes</span>
+        <div class="seg" id="rules" role="group" aria-labelledby="ruleLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label" id="minLabel">Bomb goes off after at least</span>
+        <div class="seg" id="fuseMin" role="group" aria-labelledby="minLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label" id="maxLabel">… and at most</span>
+        <div class="seg" id="fuseMax" role="group" aria-labelledby="maxLabel"></div>
+      </div>
+      <div class="field">
+        <span class="label">Ticking</span>
+        <label class="toggle" for="sound">
+          <input id="sound" type="checkbox">
+          <span>Ticking sound</span>
+        </label>
+        <label class="toggle" for="speedUp">
+          <input id="speedUp" type="checkbox">
+          <span>Ticks faster near the end (gives it away a bit)</span>
+        </label>
+      </div>
+    </div>
+    <p class="hint" id="ruleHint"></p>
+    <div class="row">
+      <button id="start" class="primary" type="button">Light the fuse</button>
+    </div>
+    <p class="hint">Nobody knows when it goes off: the time is picked at random within your range. No question comes up twice while this tab stays open. Sound on, phone not on silent.</p>
+  </section>
+</main>
+
+<!-- PLAY -->
+<section id="play" class="full" hidden>
+  <div class="full-top">
+    <button id="stop" type="button">Stop</button>
+    <span class="count" id="qCount"></span>
+  </div>
+  <div class="mid">
+    <div class="bomb" id="bomb" aria-hidden="true">💣</div>
+    <div class="q-start" id="qStart"></div>
+    <div class="q-end" id="qEnd" aria-live="polite"></div>
+  </div>
+  <div class="bottom">
+    <p class="pass-hint">Read it out loud, then hand the phone to that person.</p>
+    <button id="next" class="next" type="button">Next question</button>
+  </div>
+</section>
+
+<!-- BOOM -->
+<section id="boom" class="full boom" hidden>
+  <div class="full-top"></div>
+  <div class="mid" role="alert">
+    <div class="bang" aria-hidden="true">💥</div>
+    <div class="title" id="boomTitle"></div>
+    <div class="line" id="boomLine"></div>
+    <p class="last" id="boomLast"></p>
+  </div>
+  <div class="row">
+    <button id="again" class="primary" type="button">Again</button>
+    <button id="toSetup" type="button">Setup</button>
+  </div>
+</section>
+
+<script type="module">
+import { LANGS, FUSE_SECONDS, TAP_COOLDOWN_MS, fuseMs, questionStart, questionCount, pickQuestion, pickOutcome, outcomeText, tickGap } from "./logic.js";
+
+const $ = (id) => document.getElementById(id);
+const SETTINGS = "minigames:most-likely-boom:settings";
+const USED = "minigames:most-likely-boom:used"; // sessionStorage: { [lang]: [index, …] }, this tab only
+
+const load = (store, k, d) => { try { return JSON.parse(store.getItem(k)) ?? d; } catch { return d; } };
+const keep = (store, k, v) => { try { store.setItem(k, JSON.stringify(v)); } catch {} };
+
+const saved = load(localStorage, SETTINGS, {});
+const settings = {
+  lang: saved.lang in LANGS ? saved.lang : (navigator.language || "").startsWith("de") ? "de" : "en",
+  min: FUSE_SECONDS.includes(saved.min) ? saved.min : 60,
+  max: FUSE_SECONDS.includes(saved.max) ? saved.max : 300,
+  rule: saved.rule === "holder" ? "holder" : "twist",
+  sound: saved.sound ?? true,
+  speedUp: saved.speedUp ?? false,
+};
+const save = () => keep(localStorage, SETTINGS, settings);
+
+// ---------- setup ----------
+const fmt = (s) => (s < 60 ? `${s} s` : s % 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s / 60} min`);
+function seg(box, options, current, onPick, disabled = () => false) {
+  box.innerHTML = "";
+  for (const [value, text] of options) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = text;
+    b.setAttribute("aria-pressed", String(value === current));
+    b.disabled = disabled(value);
+    b.addEventListener("click", () => { onPick(value); save(); renderSetup(); });
+    box.append(b);
+  }
+}
+function renderSetup() {
+  seg($("langs"), Object.entries(LANGS), settings.lang, (v) => (settings.lang = v));
+  seg($("rules"), [["holder", "Holder loses"], ["twist", "Random twist"]], settings.rule, (v) => (settings.rule = v));
+  // can't pick a shortest time above the longest one, or the other way round
+  seg($("fuseMin"), FUSE_SECONDS.map((s) => [s, fmt(s)]), settings.min, (v) => (settings.min = v), (v) => v > settings.max);
+  seg($("fuseMax"), FUSE_SECONDS.map((s) => [s, fmt(s)]), settings.max, (v) => (settings.max = v), (v) => v < settings.min);
+  $("ruleHint").textContent = settings.rule === "twist"
+    ? "Random twist: when it explodes, the phone shows who loses. Mostly the holder, but sometimes the holder picks someone, or the person on their left or right loses, or both neighbours, or all three."
+    : "Whoever holds the phone when it explodes loses.";
+}
+$("sound").checked = settings.sound;
+$("sound").addEventListener("change", () => { settings.sound = $("sound").checked; save(); });
+$("speedUp").checked = settings.speedUp;
+$("speedUp").addEventListener("change", () => { settings.speedUp = $("speedUp").checked; save(); });
+
+// ---------- sound, vibration, screen ----------
+let audio = null;
+function ctx() {
+  try { audio ||= new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch {}
+  return audio;
+}
+function tickSound(high) {
+  const a = settings.sound && ctx();
+  if (!a) return;
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = "square"; o.frequency.value = high ? 1500 : 1100;
+  o.connect(g); g.connect(a.destination);
+  g.gain.setValueAtTime(0.08, a.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + 0.04);
+  o.start(); o.stop(a.currentTime + 0.05);
+}
+function boomSound() {
+  const a = settings.sound && ctx();
+  if (!a) return;
+  const len = a.sampleRate * 1.6;
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+  const noise = a.createBufferSource(); noise.buffer = buf;
+  const lp = a.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.setValueAtTime(3000, a.currentTime);
+  lp.frequency.exponentialRampToValueAtTime(200, a.currentTime + 1.4);
+  const g = a.createGain(); g.gain.value = 0.9;
+  noise.connect(lp); lp.connect(g); g.connect(a.destination);
+  const thump = a.createOscillator(), tg = a.createGain();
+  thump.frequency.setValueAtTime(120, a.currentTime); thump.frequency.exponentialRampToValueAtTime(35, a.currentTime + 0.6);
+  tg.gain.setValueAtTime(0.8, a.currentTime); tg.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.8);
+  thump.connect(tg); tg.connect(a.destination);
+  noise.start(); thump.start(); thump.stop(a.currentTime + 0.9);
+}
+const buzz = (p) => { try { navigator.vibrate?.(p); } catch {} };
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on) wakeLock = await navigator.wakeLock?.request("screen");
+    else { await wakeLock?.release?.(); wakeLock = null; }
+  } catch {}
+}
+
+// ---------- a round ----------
+let round = null; // { startAt, endAt, fuse, nextTick, ticks, loop, lastTap, shown, text }
+
+function start() {
+  ctx(); // unlock audio inside the tap (iOS)
+  keepAwake(true);
+  const fuse = fuseMs(settings.min, settings.max);
+  const now = performance.now();
+  round = { startAt: now, fuse, endAt: now + fuse, nextTick: now, ticks: 0, lastTap: 0, shown: 0, text: "" };
+  $("qStart").textContent = questionStart(settings.lang);
+  $("qStart").lang = $("qEnd").lang = settings.lang;
+  $("boom").hidden = true;
+  $("play").hidden = false;
+  nextQuestion(true);
+  round.loop = setInterval(loop, 40);
+  $("next").focus({ preventScroll: true });
+}
+
+function loop() {
+  if (!round) return;
+  const now = performance.now();
+  if (now >= round.endAt) return explode();
+  if (now >= round.nextTick) {
+    round.ticks++;
+    tickSound(round.ticks % 2);
+    const b = $("bomb");
+    b.classList.remove("tick"); void b.offsetWidth; b.classList.add("tick");
+    round.nextTick = now + tickGap(now - round.startAt, round.fuse, settings.speedUp);
+  }
+}
+
+function nextQuestion(first = false) {
+  if (!round) return;
+  const now = performance.now();
+  if (!first && now - round.lastTap < TAP_COOLDOWN_MS) return;
+  round.lastTap = now;
+  const used = load(sessionStorage, USED, {});
+  const p = pickQuestion(settings.lang, used[settings.lang]);
+  used[settings.lang] = p.used;
+  keep(sessionStorage, USED, used);
+  round.shown++;
+  round.text = p.text;
+  const q = $("qEnd");
+  q.textContent = p.text;
+  q.classList.remove("fresh"); void q.offsetWidth; q.classList.add("fresh");
+  $("qCount").textContent = `${p.used.length} / ${questionCount(settings.lang)}`;
+  if (!first) buzz(25);
+  // the button rests for a moment so a double tap can't skip a question
+  $("next").disabled = true;
+  setTimeout(() => { if (round) $("next").disabled = false; }, TAP_COOLDOWN_MS);
+}
+
+function stopRound() {
+  if (!round) return;
+  clearInterval(round.loop);
+  const r = round;
+  round = null;
+  keepAwake(false);
+  return r;
+}
+
+function explode() {
+  const r = stopRound();
+  boomSound();
+  buzz([600, 120, 400]);
+  const [title, line] = outcomeText(pickOutcome(settings.rule), settings.lang);
+  $("boomTitle").textContent = title;
+  $("boomLine").textContent = line;
+  $("boomLast").textContent = r ? `${settings.lang === "de" ? "Letzte Frage" : "Last question"}: ${questionStart(settings.lang).replace(/\s*…$/, "")} ${r.text}` : "";
+  $("boomTitle").lang = $("boomLine").lang = $("boomLast").lang = settings.lang;
+  $("play").hidden = true;
+  const b = $("boom");
+  b.hidden = false;
+  b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash");
+  // a frantic last tap shouldn't hit "Again" straight away
+  $("again").disabled = true;
+  setTimeout(() => { $("again").disabled = false; $("again").focus({ preventScroll: true }); }, 1200);
+}
+
+$("start").addEventListener("click", start);
+$("next").addEventListener("pointerdown", (e) => { e.preventDefault(); nextQuestion(); });
+$("next").addEventListener("click", (e) => { if (e.detail === 0) nextQuestion(); }); // keyboard / screen reader
+$("stop").addEventListener("click", () => { stopRound(); $("play").hidden = true; });
+$("again").addEventListener("click", start);
+$("toSetup").addEventListener("click", () => { $("boom").hidden = true; });
+
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" && e.code !== "Enter" && e.code !== "NumpadEnter") return;
+  if (e.target.id === "stop") return;
+  if (!$("play").hidden) { e.preventDefault(); if (!e.repeat) nextQuestion(); }
+  else if (!$("boom").hidden && e.target === document.body) { e.preventDefault(); if (!e.repeat && !$("again").disabled) start(); }
+});
+// Timers freeze while the screen is off; catch up (and maybe explode) as soon as it's back.
+document.addEventListener("visibilitychange", () => { if (!document.hidden && round) { keepAwake(true); loop(); } });
+
+renderSetup();
+</script>
+</body>
+</html>

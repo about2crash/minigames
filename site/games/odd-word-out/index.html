@@ -208,7 +208,7 @@ body.playing header { display: none; }
 </main>
 
 <script type="module">
-import { LANGS, MIN_PLAYERS, MAX_PLAYERS, categories, pool, pickWord, wordsLeft, maxImpostors, dealImpostors, pickStarter } from "./logic.js";
+import { LANGS, MIN_PLAYERS, MAX_PLAYERS, categories, pool, pickWord, wordsLeft, maxImpostors, dealImpostors, nextSince, pickStarter } from "./logic.js";
 
 const $ = (id) => document.getElementById(id);
 const SETTINGS = "minigames:odd-word-out:settings";
@@ -230,6 +230,7 @@ const usedWords = () => load(sessionStorage, USED, {});
 
 let game = null; // { names, impostors: [i], word, cat, starter, turn, round, history: [] }
 let rounds = 0;
+let since = []; // rounds since each seat was last an impostor (fair random), reset per game
 const history = load(sessionStorage, USED + ":history", []);
 
 // ---------- setup ----------
@@ -329,6 +330,7 @@ function startGame() {
   if (dupes.length) { $("setupError").textContent = `Two players are called “${dupes[0]}”. Give everyone a different name.`; return; }
   $("setupError").textContent = "";
   rounds = 0;
+  since = [];
   newRound(names);
 }
 
@@ -340,11 +342,12 @@ function newRound(names) {
   rounds++;
   game = {
     names,
-    impostors: dealImpostors(names.length, settings.impostors),
+    impostors: dealImpostors(names.length, settings.impostors, undefined, since),
     word: pick.word, cat: pick.cat, reset: pick.reset,
     starter: pickStarter(names.length),
     turn: 0,
   };
+  since = nextSince(since, names.length, game.impostors);
   showPass();
 }
 

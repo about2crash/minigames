@@ -80,3 +80,23 @@ test("impostors: right count, distinct seats, capped below half", () => {
   for (let i = 0; i < 4000; i++) hits[G.dealImpostors(4, 1, rand)[0]]++;
   for (const h of hits) assert.ok(h > 800, `uneven: ${hits}`);
 });
+
+test("fair random: impostor turns even out and repeats are rare, but never impossible", () => {
+  const rand = seeded(21);
+  const players = 5;
+  let since = [];
+  const count = new Array(players).fill(0);
+  let repeats = 0, last = -1;
+  const rounds = 5000;
+  for (let r = 0; r < rounds; r++) {
+    const [imp] = G.dealImpostors(players, 1, rand, since);
+    count[imp]++;
+    if (imp === last) repeats++;
+    last = imp;
+    since = G.nextSince(since, players, [imp]);
+  }
+  for (const c of count) assert.ok(Math.abs(c - rounds / players) < rounds * 0.03, `uneven: ${count}`);
+  // pure random would repeat 1 in 5 rounds; fair random far less, but still sometimes
+  assert.ok(repeats > 0 && repeats < rounds * 0.06, `repeats: ${repeats}`);
+  assert.deepEqual(G.nextSince([0, 3], 3, [1]), [1, 0, 4]);
+});
