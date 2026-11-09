@@ -9,7 +9,7 @@
 
 /** The relay this site uses unless the Settings page says otherwise. Set it after deploying relay/
  *  (see relay/README.md), e.g. "https://minigames-relay.<account>.workers.dev". Empty = no relay. */
-export const DEFAULT_RELAY = "";
+export const DEFAULT_RELAY = "https://minigames-relay.login-515.workers.dev";
 
 const KEY = "minigames:settings";
 

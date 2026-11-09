@@ -109,7 +109,7 @@ just tell a browser its public address; no game data passes through them).
 - **One scan** (`#c=<box>.<key>[.<relay url>]`): the inviter puts its invite code into a box on
   the relay, sealed with AES-GCM; the key only exists in the link's #fragment. The newcomer
   fetches it, answers into the same box, the inviter's page picks the answer up. The relay sees
-  ciphertext and IPs; boxes expire after 15 min. Relay down or blocked: the inviter falls back to
+  ciphertext and IPs; boxes expire after 15 min. Deployed at DEFAULT_RELAY (shared/settings.js). Relay down or blocked: the inviter falls back to
   a two-scan invite and says why (`RelayError` codes → sentences in relay.js).
 - **Two scans**: a member shows an invite QR/link (`#j=` + compact WebRTC offer). The
   newcomer answers with a reply QR/link (`#r=`). The inviter scans it with the phone

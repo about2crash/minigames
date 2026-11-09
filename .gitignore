@@ -5,3 +5,8 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+
+# Cloudflare wrangler (relay/): local state and secrets never go into git
+relay/.wrangler/
+.dev.vars
+node_modules/

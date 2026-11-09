@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Mailbox, newTicket, ticketCode, parseTicket, seal, unseal, testRelay, RelayError } from "../../site/shared/relay.js";
-import { cleanRelayUrl, connectMode } from "../../site/shared/settings.js";
+import { cleanRelayUrl, connectMode, relayUrl, DEFAULT_RELAY } from "../../site/shared/settings.js";
 import { startMockRelay } from "./relay-mock.mjs";
 
 test("tickets: the link carries box and key, the relay URL only when it isn't the default", () => {
@@ -34,7 +34,10 @@ test("settings: relay URLs must be https (or local), privacy turns the relay off
   assert.equal(cleanRelayUrl("not a url"), "");
   assert.equal(connectMode({ privacy: false, relay: "https://r.example" }), "relay");
   assert.equal(connectMode({ privacy: true, relay: "https://r.example" }), "direct");
-  assert.equal(connectMode({ privacy: false, relay: "" }), "direct");
+  // no custom relay: the site's default (DEFAULT_RELAY) is used, if there is one
+  assert.equal(connectMode({ privacy: false, relay: "" }), cleanRelayUrl(DEFAULT_RELAY) ? "relay" : "direct");
+  assert.equal(relayUrl({ relay: "" }), cleanRelayUrl(DEFAULT_RELAY));
+  assert.equal(connectMode({ privacy: true, relay: "" }), "direct");
 });
 
 test("offer and answer travel through a box, sealed", async () => {
