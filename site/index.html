@@ -29,16 +29,28 @@
 .game .go { font-family: var(--display); font-weight: var(--display-weight); text-transform: var(--display-case); color: var(--accent); font-size: 1.2rem; }
 .soon { border: 2px dashed var(--line); border-radius: var(--radius-lg); padding: 20px; color: var(--muted); display: grid; align-content: center; }
 @media (prefers-reduced-motion: reduce) { .game { transition: none; } }
-header { display: grid; gap: 12px; }
+header { display: grid; gap: 12px; position: relative; }
+/* Settings: gear in the top right corner of the header */
+.gear { position: absolute; top: 0; right: 0; width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: 50%; color: var(--muted); transition: color .15s, transform .3s; }
+.gear:hover { color: var(--accent); transform: rotate(45deg); }
+.gear svg { width: 26px; height: 26px; }
+header h1 { padding-right: 52px; }
+@media (prefers-reduced-motion: reduce) { .gear { transition: none; } .gear:hover { transform: none; } }
 .install { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
 </style>
 </head>
 <body>
 <main class="page">
   <header>
+    <a class="gear" href="settings/" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </a>
     <h1>Mini<span>games</span></h1>
     <p class="lede">Party games. Pass one device around, or play together on everyone's own phone.</p>
-    <p><a class="back" href="settings/">Settings: theme, multiplayer connection →</a></p>
     <div class="install" id="install" hidden>
       <button id="installBtn" class="primary" type="button">Install app</button>
       <span class="hint">Adds Minigames to your home screen. Works offline.</span>
